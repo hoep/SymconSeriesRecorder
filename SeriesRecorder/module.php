@@ -441,9 +441,15 @@ class SeriesRecorder extends IPSModule
         if (!function_exists('shell_exec')) {
             return ['ok' => false, 'meldung' => 'shell_exec steht nicht zur Verfuegung'];
         }
-        $alsRoot = (function_exists('posix_geteuid') && posix_geteuid() === 0);
-        $befehl = ($alsRoot ? 'mount -a' : 'sudo -n mount -a') . ' 2>&1';
-        $aus = trim((string) @shell_exec($befehl));
+        // Nicht raten, wer wir sind: 'posix_geteuid' fehlt in dieser PHP-Fassung,
+        // und die Antwort waere ohnehin nur die halbe Wahrheit. Stattdessen erst
+        // ohne sudo versuchen und nur bei einem Rechtefehler nachsetzen - das
+        // funktioniert als root wie als normaler Benutzer mit sudo-Erlaubnis.
+        $aus = trim((string) @shell_exec('mount -a 2>&1'));
+        $rechte = preg_match('/permission denied|not permitted|only root|must be superuser/i', $aus) === 1;
+        if ($rechte) {
+            $aus .= ' | sudo: ' . trim((string) @shell_exec('sudo -n mount -a 2>&1'));
+        }
         // Der Einhaengevorgang braucht einen Moment, bis das Verzeichnis traegt.
         sleep(2);
         return [
