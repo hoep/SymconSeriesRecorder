@@ -3,6 +3,11 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/../libs/SeriesRecorder/Analyse.php';
+// Die Netzquellen haengen an keiner anderen Datei - ohne diese beiden Zeilen
+// faellt erst der Lauf auf die Nase, und zwar nur, wenn jemand das Gate
+// einschaltet. Genau so ist es passiert.
+require_once __DIR__ . '/../libs/SeriesRecorder/TmdbQuelle.php';
+require_once __DIR__ . '/../libs/SeriesRecorder/TvdbQuelle.php';
 
 use Hoep\SeriesRecorder\Analyse;
 use Hoep\SeriesRecorder\Bedingungen;
