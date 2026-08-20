@@ -288,6 +288,61 @@ class SeriesRecorder extends IPSModule
     }
 
     /**
+     * Loescht EINE Aufnahme - die aus der Duplikatliste.
+     *
+     * Der Pfad kommt aus dem Formular und wird nicht geglaubt: vor dem Loeschen
+     * rechnet das Modul die Vorschlagsliste NEU und prueft, ob die Datei dort
+     * als ueberfluessig steht. Ein Formular kann Stunden offen sein, in der Zeit
+     * kann der Bestand ein anderer sein - ohne diese Probe wuerde ein alter
+     * Knopfdruck eine Aufnahme treffen, die inzwischen die einzige ist.
+     *
+     * Das Scharf-Gate gilt hier bewusst NICHT: dies ist kein Automatismus,
+     * sondern ein einzelner, ausdruecklicher Klick auf eine benannte Datei.
+     */
+    public function LoescheDatei(string $Pfad): string
+    {
+        $Pfad = trim($Pfad);
+        if ($Pfad === '') {
+            return json_encode(['ok' => false, 'grund' => 'kein Pfad']);
+        }
+        $d = new Duplikate($this->bestandsdatei());
+        $e = $d->finde();
+
+        $treffer = null;
+        foreach ($e['gruppen'] as $g) {
+            foreach ($g['loeschen'] as $w) {
+                if ((string) $w['pfad'] === $Pfad) {
+                    $treffer = ['weg' => $w, 'bleibt' => $g['behalten']];
+                    break 2;
+                }
+            }
+        }
+        if ($treffer === null) {
+            $this->SetValue('Duplikate', date('d.m. H:i') . ' · abgelehnt: steht nicht mehr als ueberfluessig in der Liste');
+            return json_encode([
+                'ok' => false,
+                'grund' => 'Diese Datei steht in der aktuellen Pruefung nicht als ueberfluessig. '
+                         . 'Bitte erst neu pruefen.',
+                'pfad' => $Pfad,
+            ], JSON_UNESCAPED_UNICODE);
+        }
+
+        $r = $d->loesche([$treffer['weg']]);
+        $ok = $r['geloescht'] === 1;
+        $this->SetValue('Duplikate', sprintf('%s · %s: %s (%s)%s',
+            date('d.m. H:i'), $ok ? 'geloescht' : 'FEHLER', basename($Pfad),
+            Duplikate::mb((int) $treffer['weg']['groesse']),
+            $ok ? ' · es bleibt ' . basename((string) $treffer['bleibt']['pfad']) : ''));
+
+        // Die Bestandsliste ist jetzt veraltet - der naechste Scan zieht nach.
+        return json_encode([
+            'ok' => $ok, 'geloescht' => $r['geloescht'], 'fehler' => $r['fehler'],
+            'freigeworden' => Duplikate::mb($r['bytes']),
+            'bleibt' => basename((string) $treffer['bleibt']['pfad']),
+        ], JSON_UNESCAPED_UNICODE);
+    }
+
+    /**
      * Nimmt den Bestand auf der Platte auf. Rein lesend bis auf die eigene
      * Liste; loescht und benennt nichts um.
      */
@@ -444,6 +499,19 @@ class SeriesRecorder extends IPSModule
                  ]],
             ],
             'actions' => [
+                ['type' => 'List', 'name' => 'DuplikateAnsicht', 'caption' => 'Mehrfach vorhandene Aufnahmen',
+                 'rowCount' => 12, 'add' => false, 'delete' => false,
+                 'columns' => [
+                    ['caption' => 'Serie', 'name' => 'serie', 'width' => '210px'],
+                    ['caption' => 'Folge', 'name' => 'nummer', 'width' => '80px'],
+                    ['caption' => 'Bleibt', 'name' => 'bleibt', 'width' => 'auto'],
+                    ['caption' => 'Groesse', 'name' => 'bgroesse', 'width' => '80px'],
+                    ['caption' => 'Ueberfluessig', 'name' => 'weg', 'width' => 'auto'],
+                    ['caption' => 'Groesse', 'name' => 'wgroesse', 'width' => '80px'],
+                    ['caption' => '', 'name' => 'aktion', 'width' => '110px'],
+                 ],
+                 'values' => $this->duplikatZeilen()],
+                ['type' => 'Label', 'caption' => 'Der Knopf loescht genau die Datei der Zeile. Vorher wird geprueft, ob sie in einer frisch gerechneten Liste noch als ueberfluessig steht.'],
                 ['type' => 'Button', 'caption' => 'Jetzt lesen (ohne Wirkung)', 'onClick' => 'SR_Analyse($id);'],
                 ['type' => 'Button', 'caption' => 'Programmvorschau jetzt holen', 'onClick' => 'echo SR_HoleProgramm($id);'],
                 ['type' => 'Button', 'caption' => 'Wunschliste jetzt holen', 'onClick' => 'echo SR_HoleWunschliste($id);'],
@@ -587,6 +655,63 @@ class SeriesRecorder extends IPSModule
             return null;
         }
         return count($quellen) === 1 ? $quellen[0] : new Quellenkette(...$quellen);
+    }
+
+    /**
+     * Zeilen fuer die Duplikat-Ansicht im Formular, jede mit eigenem Loeschknopf.
+     *
+     * @return list<array<string,mixed>>
+     */
+    private function duplikatZeilen(): array
+    {
+        $roh = json_decode((string) @$this->GetValue('DuplikateListe'), true);
+        if (!is_array($roh) || count($roh) < 2) {
+            return [];
+        }
+        $aus = [];
+        foreach (array_slice($roh, 1) as $z) {
+            if (!is_array($z) || count($z) < 7) {
+                continue;
+            }
+            // Der Knopf traegt den vollen Pfad; die Tabelle zeigt nur den Dateinamen,
+            // sonst ist die Zeile nicht mehr lesbar.
+            $pfad = $this->pfadZuDateiname((string) $z[5]);
+            $aus[] = [
+                'serie' => $z[0], 'nummer' => $z[1],
+                'bleibt' => $z[3], 'bgroesse' => $z[4],
+                'weg' => $z[5], 'wgroesse' => $z[6],
+                'aktion' => [
+                    'type' => 'Button', 'caption' => 'Loeschen',
+                    'onClick' => 'echo SR_LoescheDatei($id, "' . addslashes($pfad) . '");',
+                ],
+            ];
+        }
+        return $aus;
+    }
+
+    /**
+     * Sucht zu einem Dateinamen den vollen Pfad aus der Bestandsliste.
+     * Die Anzeigetabelle fuehrt nur den Namen - der Knopf braucht den Pfad.
+     */
+    private function pfadZuDateiname(string $name): string
+    {
+        $fh = @fopen($this->bestandsdatei(), 'r');
+        if ($fh === false) {
+            return '';
+        }
+        $treffer = '';
+        while (($z = fgets($fh)) !== false) {
+            if (!mb_check_encoding($z, 'UTF-8')) {
+                $z = mb_convert_encoding($z, 'UTF-8', 'ISO-8859-1');
+            }
+            $p = trim((string) substr($z, (int) strrpos($z, '|') + 1));
+            if ($p !== '' && basename($p) === $name) {
+                $treffer = $p;
+                break;
+            }
+        }
+        fclose($fh);
+        return $treffer;
     }
 
     /** Nur wenn eine Adresse eingetragen ist - sonst bleibt der Receiver aussen vor. */
