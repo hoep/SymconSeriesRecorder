@@ -184,3 +184,25 @@ Episoden bringt.
 Moduls. Die Serien-Dumps im Hauptverzeichnis und der TVDB-Cache frieren dann
 auf ihrem letzten Stand ein - was kein Verlust ist, solange TMDB die neuen
 Folgen liefert, aber vor dem Abschalten geprueft gehoert.
+
+## Ablösung des Skript-Bundles
+
+Inventur vom 20.08.2026: **17 Skripte** bilden den Kern, sechs davon laufen
+zyklisch.
+
+| Skript | Takt | Aufgabe | Modul |
+|---|---|---|---|
+| DownLoad Data (46864) | 2 h | Vorschau holen, Wunschliste | Vorschau erledigt, Wunschliste offen |
+| DownLoad Data Alt (38017) | 2 h | zweite Quelle | offen |
+| Schedule Recordings (44702) | 2 h | zuordnen, Timer setzen, Tabellen | zuordnen erledigt, Rest offen |
+| checkDuplicates (12003) | 1 h | Duplikate suchen | offen |
+| deleteDuplicates (49284) | — | Duplikate loeschen | offen |
+| checkCorrectEpisodeNames (14281) | 1 h | Episodennamen richtigstellen | offen |
+
+Jede Aufgabe bekommt im Modul einen eigenen Takt. Ein gemeinsamer muesste sich
+am teuersten Posten orientieren - die Vorschau aendert sich zweimal am Tag, die
+Zuordnung soll oefter laufen.
+
+**Zur URL der Programmvorschau:** Im Altskript stehen drei, zwei davon
+auskommentiert. Die abgeschaltete `epg.xmltv.host` antwortet heute mit HTTP 522,
+die aktive `epg.best` mit 200 in 3,8 s. Als Property ist sichtbar, welche gilt.
