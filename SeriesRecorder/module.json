@@ -1,0 +1,12 @@
+{
+    "id": "{F7F9F89F-82ED-4478-970F-C3C749912A0A}",
+    "name": "SeriesRecorder",
+    "type": 3,
+    "vendor": "",
+    "aliases": ["Serienrecorder"],
+    "parentRequirements": [],
+    "childRequirements": [],
+    "implemented": [],
+    "prefix": "SR",
+    "url": "https://github.com/hoep/SymconSeriesRecorder"
+}

@@ -43,3 +43,36 @@ Der Echtvergleich ist der wichtigere: er stellt die Zuordnung des laufenden
 Altsystems Sendung fuer Sendung (Kanal + Startzeit) der neuen gegenueber. Ein
 Umstieg ist erst vertretbar, wenn dort "NICHT MEHR" und "ANDERS" auf null
 stehen.
+
+## Sender: warum fuenf Stufen
+
+Das XMLTV und die Empfangsliste des Receivers schreiben denselben Sender
+verschieden. Die Skript-Fassung hatte dafuer eine Tabelle mit 27 Paaren; sie
+verglich gegen den XMLTV-Anzeigenamen und traf ihn oft nicht. Der Mapper
+probiert der Reihe nach:
+
+    tabelle              ausdrueckliche Zuordnung
+    exakt                gleiche Vergleichsform
+    ohne Zusatz          HD/SD/DE/AT weg          "Kabel 1 DE"   -> kabel eins HD
+    kanonisch            Zahlwoerter als Ziffern  "Pro 7 Maxx"   -> Pro7 MAXX HD
+    verdichtet           ohne Leerzeichen         "ZDF Info DE"  -> ZDFinfo HD
+    namensanfang         Praefix                  "Anixe DE"     -> AnixeHD Serie
+
+Die letzten drei Stufen greifen NUR, wenn genau ein Empfangskanal passt. "One"
+ist Anfang von "ONE HD" und von "One Terra HD" - dort waere jede Wahl geraten,
+also gibt es keinen Treffer und einen Eintrag im Protokoll. Ein falsch
+zugeordneter Sender nimmt die falsche Sendung auf; das ist teurer als eine
+verpasste Folge.
+
+Ergebnis gegen die echten Daten: 57 von 63 XMLTV-Sendern zugeordnet. Die
+uebrigen sechs sind Spartenkanaele und ORF 3, die der Receiver nicht kennt.
+
+## Stand des Vergleichs (20.08.2026)
+
+Zeitfenster 20.-26.08., derselbe Datenbestand:
+
+    Altsystem   415 Sendungen
+    Modul       444 Sendungen
+    Verlust       0
+    zusaetzlich  29   (Walking on Sunshine 22, Law & Order 4, Kroatien-Krimi 2,
+                       Barcelona-Krimi 2, Barbie 1)
