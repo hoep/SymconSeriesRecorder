@@ -10,10 +10,12 @@ require_once __DIR__ . '/../libs/SeriesRecorder/TmdbQuelle.php';
 require_once __DIR__ . '/../libs/SeriesRecorder/TvdbQuelle.php';
 require_once __DIR__ . '/../libs/SeriesRecorder/XmltvBezug.php';
 require_once __DIR__ . '/../libs/SeriesRecorder/WunschlisteBezug.php';
+require_once __DIR__ . '/../libs/SeriesRecorder/Bestandsscan.php';
 
 use Hoep\SeriesRecorder\Analyse;
 use Hoep\SeriesRecorder\Bedingungen;
 use Hoep\SeriesRecorder\Bestand;
+use Hoep\SeriesRecorder\Bestandsscan;
 use Hoep\SeriesRecorder\Episodenkatalog;
 use Hoep\SeriesRecorder\Quellenkette;
 use Hoep\SeriesRecorder\TmdbQuelle;
@@ -44,6 +46,7 @@ class SeriesRecorder extends IPSModule
     private const TIMER_LAUF   = 'Lauf';
     private const TIMER_BEZUG  = 'Bezug';
     private const TIMER_WUNSCH = 'Wunschliste';
+    private const TIMER_SCAN   = 'Bestandsscan';
 
     public function Create(): void
     {
@@ -63,6 +66,13 @@ class SeriesRecorder extends IPSModule
         $this->RegisterPropertyString('WunschBenutzer', '');
         $this->RegisterPropertyString('WunschPasswort', '');
         $this->RegisterPropertyString('WunschZiel', 'favorites-sr.xml');
+        // Bestandsscan: welche Aufnahmen liegen auf der Platte?
+        $this->RegisterPropertyInteger('IntervallScan', 0);
+        $this->RegisterPropertyString('Aufnahmepfade', '/mnt/Aufnahmen');
+        $this->RegisterPropertyString('ScanZiel', 'recordings-sr.txt');
+        // Untergrenze gegen den Fall einer nicht eingebundenen Freigabe: darunter
+        // gilt der Scan als fehlgeschlagen und die alte Liste bleibt stehen.
+        $this->RegisterPropertyInteger('ScanMindestens', 50);
         $this->RegisterPropertyString('Datenpfad', '/var/lib/symcon/serienrecorder/');
         $this->RegisterPropertyString('XmltvDatei', 'xmltv.xml');
         $this->RegisterPropertyString('FavoritenDatei', 'favorites.xml');
@@ -93,6 +103,7 @@ class SeriesRecorder extends IPSModule
         $this->RegisterTimer(self::TIMER_LAUF, 0, 'SR_Analyse($_IPS[\'TARGET\']);');
         $this->RegisterTimer(self::TIMER_BEZUG, 0, 'SR_HoleProgramm($_IPS[\'TARGET\']);');
         $this->RegisterTimer(self::TIMER_WUNSCH, 0, 'SR_HoleWunschliste($_IPS[\'TARGET\']);');
+        $this->RegisterTimer(self::TIMER_SCAN, 0, 'SR_ScanneBestand($_IPS[\'TARGET\']);');
     }
 
     public function ApplyChanges(): void
@@ -111,6 +122,7 @@ class SeriesRecorder extends IPSModule
         $this->RegisterVariableString('Quellen', 'Episodenquellen', '', 80);
         $this->RegisterVariableString('Bezug', 'Programmvorschau geholt', '', 90);
         $this->RegisterVariableString('Wunschliste', 'Wunschliste geholt', '', 100);
+        $this->RegisterVariableString('Bestand', 'Bestand aufgenommen', '', 110);
 
         $an = $this->ReadPropertyBoolean('Aktiv');
         $this->SetTimerInterval(self::TIMER_LAUF,
@@ -119,6 +131,8 @@ class SeriesRecorder extends IPSModule
             ($an ? max(0, $this->ReadPropertyInteger('IntervallBezug')) : 0) * 60 * 1000);
         $this->SetTimerInterval(self::TIMER_WUNSCH,
             ($an ? max(0, $this->ReadPropertyInteger('IntervallWunsch')) : 0) * 60 * 1000);
+        $this->SetTimerInterval(self::TIMER_SCAN,
+            ($an ? max(0, $this->ReadPropertyInteger('IntervallScan')) : 0) * 60 * 1000);
 
         $fehlt = $this->fehlendeDateien();
         if ($fehlt !== []) {
@@ -200,6 +214,22 @@ class SeriesRecorder extends IPSModule
         return json_encode($e, JSON_UNESCAPED_UNICODE);
     }
 
+    /**
+     * Nimmt den Bestand auf der Platte auf. Rein lesend bis auf die eigene
+     * Liste; loescht und benennt nichts um.
+     */
+    public function ScanneBestand(): string
+    {
+        $pfade = array_values(array_filter(array_map('trim',
+            explode(',', $this->ReadPropertyString('Aufnahmepfade')))));
+        $s = new Bestandsscan($pfade, ['ts', 'mkv', 'mp4'],
+            max(1, $this->ReadPropertyInteger('ScanMindestens')));
+        $e = $s->lauf($this->pfad('ScanZiel'), rtrim($this->ReadPropertyString('Datenpfad'), '/') . '/serien-sr.txt');
+        $this->SetValue('Bestand', sprintf('%s · %s · %d Aufnahmen, %d Serien · %.1f s',
+            date('d.m. H:i'), $e['meldung'], $e['dateien'], $e['serien'], $e['dauerMs'] / 1000));
+        return json_encode($e, JSON_UNESCAPED_UNICODE);
+    }
+
     /** Holt die Wunschliste. Schreibt in die EIGENE Datei. */
     public function HoleWunschliste(): string
     {
@@ -263,6 +293,10 @@ class SeriesRecorder extends IPSModule
                 ['type' => 'ValidationTextBox', 'name' => 'XmltvUrl', 'caption' => 'Quelle der Programmvorschau (URL)'],
                 ['type' => 'ValidationTextBox', 'name' => 'XmltvZiel', 'caption' => 'Zieldatei (eigene, nicht die des Altsystems)'],
                 ['type' => 'NumberSpinner', 'name' => 'IntervallWunsch', 'caption' => 'Wunschliste holen (Minuten)', 'minimum' => 0, 'maximum' => 10080],
+                ['type' => 'NumberSpinner', 'name' => 'IntervallScan', 'caption' => 'Bestand scannen (Minuten)', 'minimum' => 0, 'maximum' => 10080],
+                ['type' => 'ValidationTextBox', 'name' => 'Aufnahmepfade', 'caption' => 'Aufnahmeverzeichnisse (mit Komma trennen)'],
+                ['type' => 'ValidationTextBox', 'name' => 'ScanZiel', 'caption' => 'Bestandsliste (eigene)'],
+                ['type' => 'NumberSpinner', 'name' => 'ScanMindestens', 'caption' => 'Weniger Funde = Scan gilt als fehlgeschlagen', 'minimum' => 1, 'maximum' => 100000],
                 ['type' => 'ExpansionPanel', 'caption' => 'Zugang zur Wunschliste', 'items' => [
                     ['type' => 'ValidationTextBox', 'name' => 'WunschBenutzer', 'caption' => 'Benutzer'],
                     ['type' => 'PasswordTextBox', 'name' => 'WunschPasswort', 'caption' => 'Passwort'],
@@ -330,6 +364,7 @@ class SeriesRecorder extends IPSModule
                 ['type' => 'Button', 'caption' => 'Jetzt lesen (ohne Wirkung)', 'onClick' => 'SR_Analyse($id);'],
                 ['type' => 'Button', 'caption' => 'Programmvorschau jetzt holen', 'onClick' => 'echo SR_HoleProgramm($id);'],
                 ['type' => 'Button', 'caption' => 'Wunschliste jetzt holen', 'onClick' => 'echo SR_HoleWunschliste($id);'],
+                ['type' => 'Button', 'caption' => 'Bestand jetzt scannen', 'onClick' => 'echo SR_ScanneBestand($id);'],
                 ['type' => 'RowLayout', 'items' => [
                     ['type' => 'ValidationTextBox', 'name' => 'ProbeTitel', 'caption' => 'Titel pruefen'],
                     ['type' => 'Button', 'caption' => 'Zuordnen', 'onClick' => 'echo SR_TitelProbe($id, $ProbeTitel);'],
@@ -365,7 +400,7 @@ class SeriesRecorder extends IPSModule
     {
         $tt = $this->titeltabelle();
         return new Analyse($this->favoriten(), $tt['aliase'], $tt['ablage'], $this->empfangbar(),
-            $this->kanaltabelle(), new Bestand($this->pfad('BestandDatei')), $this->bedingungen(),
+            $this->kanaltabelle(), new Bestand($this->bestandsdatei()), $this->bedingungen(),
             $this->episodenquelle());
     }
 
@@ -468,6 +503,13 @@ class SeriesRecorder extends IPSModule
             return null;
         }
         return count($quellen) === 1 ? $quellen[0] : new Quellenkette(...$quellen);
+    }
+
+    /** Die selbst aufgenommene Liste hat Vorrang, sonst die des Altsystems. */
+    private function bestandsdatei(): string
+    {
+        $eigen = $this->pfad('ScanZiel');
+        return is_readable($eigen) ? $eigen : $this->pfad('BestandDatei');
     }
 
     private function bedingungen(): Bedingungen
