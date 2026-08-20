@@ -8,6 +8,7 @@ require_once __DIR__ . '/Bestand.php';
 require_once __DIR__ . '/EpisodenNummer.php';
 require_once __DIR__ . '/Bedingungen.php';
 require_once __DIR__ . '/Episodenkatalog.php';
+require_once __DIR__ . '/Quellenkette.php';
 
 /**
  * Was soll mit einer Ausstrahlung geschehen?
@@ -42,7 +43,7 @@ final class Entscheidung
     public function __construct(
         private Bestand $bestand,
         private ?Bedingungen $bedingungen = null,
-        private ?Episodenkatalog $katalog = null,
+        private ?EpisodenQuelle $katalog = null,
     ) {
     }
 

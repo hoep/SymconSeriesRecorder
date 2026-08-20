@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Hoep\SeriesRecorder;
 
 require_once __DIR__ . '/Bestand.php';
+require_once __DIR__ . '/EpisodenQuelle.php';
 
 /**
  * Staffel und Folge nachschlagen, wenn das EPG sie nicht liefert.
@@ -27,7 +28,7 @@ require_once __DIR__ . '/Bestand.php';
  * der die Folge auch im Aufnahmebestand liegt. Erst damit greifen Bestands-
  * abgleich und Serien-Schranken bei dieser Serie ueberhaupt.
  */
-final class Episodenkatalog
+final class Episodenkatalog implements EpisodenQuelle
 {
     /** @var array<string,array<string,array{staffel:int,folge:int}>> Serie => Episodentitel => Nummer */
     private array $katalog = [];
@@ -38,6 +39,11 @@ final class Episodenkatalog
     public function __construct(private string $verzeichnis)
     {
         $this->lade();
+    }
+
+    public function bericht(): string
+    {
+        return sprintf('Katalog: %d Serien, %d Episoden aus der Ablage', $this->serien, $this->episoden);
     }
 
     public function serien(): int
