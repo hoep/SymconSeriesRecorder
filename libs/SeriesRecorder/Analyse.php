@@ -8,6 +8,7 @@ require_once __DIR__ . '/TitelResolver.php';
 require_once __DIR__ . '/KanalMapper.php';
 require_once __DIR__ . '/XmltvLeser.php';
 require_once __DIR__ . '/Entscheidung.php';
+require_once __DIR__ . '/Receiver.php';
 
 /**
  * Der lesende Durchlauf: welche Ausstrahlungen der Wunschliste stehen an?
@@ -32,6 +33,7 @@ final class Analyse
         private ?Bestand $bestand = null,
         private ?Bedingungen $bedingungen = null,
         private ?EpisodenQuelle $katalog = null,
+        private ?Receiver $receiver = null,
     ) {
     }
 
@@ -63,7 +65,7 @@ final class Analyse
         // Ohne Bestandsliste bleibt es beim "was laeuft" - die Entscheidung, ob eine
         // Folge fehlt, braucht die Platte. Beides getrennt, damit der Lauf auch dann
         // etwas liefert, wenn der Scanner gerade nichts geschrieben hat.
-        $urteiler = $this->bestand !== null ? new Entscheidung($this->bestand, $this->bedingungen, $this->katalog) : null;
+        $urteiler = $this->bestand !== null ? new Entscheidung($this->bestand, $this->bedingungen, $this->katalog, $this->receiver) : null;
         $urteiler?->beginneLauf();
 
         $treffer = [];
@@ -89,6 +91,9 @@ final class Analyse
                 'titel'      => $s['titel'],
                 'untertitel' => $s['untertitel'],
                 'folgeNum'   => $s['folge'],
+                'kanal'      => $kanal[$s['kanal']],
+                'start'      => $s['start'],
+                'ende'       => $s['ende'],
             ]);
             if ($u !== null) {
                 $z[$u['urteil']] = ($z[$u['urteil']] ?? 0) + 1;
@@ -121,7 +126,8 @@ final class Analyse
             'sendungen'    => $treffer,
             'kennzahlen'   => $z + ['Serien mit Ausstrahlung' => count(array_unique(array_column($treffer, 'serie')))],
             'offeneSender' => $offen,
-            'quellen'      => $this->katalog?->bericht() ?? '',
+            'quellen'      => trim(($this->katalog?->bericht() ?? '')
+                                . ($this->receiver !== null ? ' | ' . $this->receiver->bericht() : '')),
             'dauerMs'      => (int) round((microtime(true) - $t0) * 1000),
         ];
     }
