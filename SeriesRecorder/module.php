@@ -9,6 +9,7 @@ require_once __DIR__ . '/../libs/SeriesRecorder/Analyse.php';
 require_once __DIR__ . '/../libs/SeriesRecorder/TmdbQuelle.php';
 require_once __DIR__ . '/../libs/SeriesRecorder/TvdbQuelle.php';
 require_once __DIR__ . '/../libs/SeriesRecorder/XmltvBezug.php';
+require_once __DIR__ . '/../libs/SeriesRecorder/WunschlisteBezug.php';
 
 use Hoep\SeriesRecorder\Analyse;
 use Hoep\SeriesRecorder\Bedingungen;
@@ -19,6 +20,7 @@ use Hoep\SeriesRecorder\TmdbQuelle;
 use Hoep\SeriesRecorder\TvdbQuelle;
 use Hoep\SeriesRecorder\KanalMapper;
 use Hoep\SeriesRecorder\TitelResolver;
+use Hoep\SeriesRecorder\WunschlisteBezug;
 use Hoep\SeriesRecorder\XmltvBezug;
 use Hoep\SeriesRecorder\XmltvLeser;
 
@@ -41,6 +43,7 @@ class SeriesRecorder extends IPSModule
     // gemeinsamer Takt muesste sich am teuersten Posten orientieren.
     private const TIMER_LAUF   = 'Lauf';
     private const TIMER_BEZUG  = 'Bezug';
+    private const TIMER_WUNSCH = 'Wunschliste';
 
     public function Create(): void
     {
@@ -54,6 +57,12 @@ class SeriesRecorder extends IPSModule
         // Eigene Zieldatei: solange das Altsystem laeuft, wuerden sich beide
         // gegenseitig die Datei ueberschreiben.
         $this->RegisterPropertyString('XmltvZiel', 'xmltv-sr.xml');
+        // Zugang zur Wunschliste. Gehoert wie die API-Schluessel hierher und
+        // nicht in eine Codezeile des Ablaufskripts.
+        $this->RegisterPropertyInteger('IntervallWunsch', 0);
+        $this->RegisterPropertyString('WunschBenutzer', '');
+        $this->RegisterPropertyString('WunschPasswort', '');
+        $this->RegisterPropertyString('WunschZiel', 'favorites-sr.xml');
         $this->RegisterPropertyString('Datenpfad', '/var/lib/symcon/serienrecorder/');
         $this->RegisterPropertyString('XmltvDatei', 'xmltv.xml');
         $this->RegisterPropertyString('FavoritenDatei', 'favorites.xml');
@@ -83,6 +92,7 @@ class SeriesRecorder extends IPSModule
 
         $this->RegisterTimer(self::TIMER_LAUF, 0, 'SR_Analyse($_IPS[\'TARGET\']);');
         $this->RegisterTimer(self::TIMER_BEZUG, 0, 'SR_HoleProgramm($_IPS[\'TARGET\']);');
+        $this->RegisterTimer(self::TIMER_WUNSCH, 0, 'SR_HoleWunschliste($_IPS[\'TARGET\']);');
     }
 
     public function ApplyChanges(): void
@@ -100,12 +110,15 @@ class SeriesRecorder extends IPSModule
         $this->RegisterVariableString('OffeneSender', 'Sender ohne Empfangskanal', '', 70);
         $this->RegisterVariableString('Quellen', 'Episodenquellen', '', 80);
         $this->RegisterVariableString('Bezug', 'Programmvorschau geholt', '', 90);
+        $this->RegisterVariableString('Wunschliste', 'Wunschliste geholt', '', 100);
 
         $an = $this->ReadPropertyBoolean('Aktiv');
         $this->SetTimerInterval(self::TIMER_LAUF,
             ($an ? max(0, $this->ReadPropertyInteger('Intervall')) : 0) * 60 * 1000);
         $this->SetTimerInterval(self::TIMER_BEZUG,
             ($an ? max(0, $this->ReadPropertyInteger('IntervallBezug')) : 0) * 60 * 1000);
+        $this->SetTimerInterval(self::TIMER_WUNSCH,
+            ($an ? max(0, $this->ReadPropertyInteger('IntervallWunsch')) : 0) * 60 * 1000);
 
         $fehlt = $this->fehlendeDateien();
         if ($fehlt !== []) {
@@ -187,6 +200,23 @@ class SeriesRecorder extends IPSModule
         return json_encode($e, JSON_UNESCAPED_UNICODE);
     }
 
+    /** Holt die Wunschliste. Schreibt in die EIGENE Datei. */
+    public function HoleWunschliste(): string
+    {
+        $b = new WunschlisteBezug(
+            $this->ReadPropertyString('WunschBenutzer'),
+            $this->ReadPropertyString('WunschPasswort'),
+            $this->pfad('WunschZiel'),
+            rtrim($this->ReadPropertyString('Datenpfad'), '/')
+        );
+        $e = $b->hole();
+        $this->SetValue('Wunschliste', sprintf('%s · %s%s · %.1f s',
+            date('d.m. H:i'), $e['meldung'],
+            $e['anzahl'] > 0 ? (' (' . $e['anzahl'] . ' Serien)') : '',
+            $e['dauerMs'] / 1000));
+        return json_encode($e, JSON_UNESCAPED_UNICODE);
+    }
+
     /** Diagnose: welche Nummer kennt der Episoden-Cache zu dieser Folge? */
     public function KatalogProbe(string $Serie, string $Episodentitel): string
     {
@@ -232,6 +262,12 @@ class SeriesRecorder extends IPSModule
                 ['type' => 'NumberSpinner', 'name' => 'IntervallBezug', 'caption' => 'Programmvorschau holen (Minuten)', 'minimum' => 0, 'maximum' => 10080],
                 ['type' => 'ValidationTextBox', 'name' => 'XmltvUrl', 'caption' => 'Quelle der Programmvorschau (URL)'],
                 ['type' => 'ValidationTextBox', 'name' => 'XmltvZiel', 'caption' => 'Zieldatei (eigene, nicht die des Altsystems)'],
+                ['type' => 'NumberSpinner', 'name' => 'IntervallWunsch', 'caption' => 'Wunschliste holen (Minuten)', 'minimum' => 0, 'maximum' => 10080],
+                ['type' => 'ExpansionPanel', 'caption' => 'Zugang zur Wunschliste', 'items' => [
+                    ['type' => 'ValidationTextBox', 'name' => 'WunschBenutzer', 'caption' => 'Benutzer'],
+                    ['type' => 'PasswordTextBox', 'name' => 'WunschPasswort', 'caption' => 'Passwort'],
+                    ['type' => 'ValidationTextBox', 'name' => 'WunschZiel', 'caption' => 'Zieldatei'],
+                ]],
                 ['type' => 'NumberSpinner', 'name' => 'Vorschau', 'caption' => 'Vorschau (Tage)', 'minimum' => 1, 'maximum' => 28],
                 ['type' => 'CheckBox', 'name' => 'Katalog', 'caption' => 'Fehlende Staffel/Folge im Episoden-Cache nachschlagen (kein Netzzugriff)'],
                 ['type' => 'ExpansionPanel', 'caption' => 'TMDB befragen, wenn der Cache nichts weiss', 'items' => [
@@ -293,6 +329,7 @@ class SeriesRecorder extends IPSModule
             'actions' => [
                 ['type' => 'Button', 'caption' => 'Jetzt lesen (ohne Wirkung)', 'onClick' => 'SR_Analyse($id);'],
                 ['type' => 'Button', 'caption' => 'Programmvorschau jetzt holen', 'onClick' => 'echo SR_HoleProgramm($id);'],
+                ['type' => 'Button', 'caption' => 'Wunschliste jetzt holen', 'onClick' => 'echo SR_HoleWunschliste($id);'],
                 ['type' => 'RowLayout', 'items' => [
                     ['type' => 'ValidationTextBox', 'name' => 'ProbeTitel', 'caption' => 'Titel pruefen'],
                     ['type' => 'Button', 'caption' => 'Zuordnen', 'onClick' => 'echo SR_TitelProbe($id, $ProbeTitel);'],
@@ -363,7 +400,9 @@ class SeriesRecorder extends IPSModule
     /** @return list<string> */
     private function favoriten(): array
     {
-        $d = $this->json($this->pfad('FavoritenDatei'));
+        // Die selbst geholte Liste hat Vorrang, sonst die des Altsystems.
+        $eigen = $this->pfad('WunschZiel');
+        $d = $this->json(is_readable($eigen) ? $eigen : $this->pfad('FavoritenDatei'));
         return array_values(array_filter(array_map(
             static fn(array $f): string => trim((string) ($f['name'] ?? '')),
             $d['favorites'] ?? []

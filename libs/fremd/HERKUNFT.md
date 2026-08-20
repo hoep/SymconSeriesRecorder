@@ -40,3 +40,15 @@ TMDB dagegen laeuft mit dem Schluessel, der ohnehin schon in der Konfiguration
 steht - Suche und Episodenabruf beide mit HTTP 200, deutsche Titel inklusive.
 Damit kehrt sich die Rangfolge um: TMDB ist die Quelle fuer alles Unbekannte,
 TheTVDB bleibt fuer die rund 200 Serien, deren ID im Cache liegt.
+
+## serienrecorder.class.wunschliste.php
+
+Unveraendert uebernommen (Stand 2025, 811 Zeilen). Meldet sich bei
+wunschliste.de an, haelt die Sitzung ueber einen Cookie-Speicher und liest die
+Favoritenliste. Wie die anderen beiden: keine IPS-Aufrufe. Vom Umfeld braucht
+sie zwei Methoden - `log()` und `shouldRefreshFile()`; letztere ist eine reine
+Altersfrage und steht deshalb im Adapter.
+
+Eine fremde Anmeldestrecke nachzubauen hiesse, sie ein zweites Mal zu erraten -
+mit dem Ergebnis, dass bei der naechsten Aenderung der Webseite zwei Fassungen
+brechen statt einer.
