@@ -255,7 +255,7 @@ class SeriesRecorder extends IPSModule
 
         $scharf = $this->ReadPropertyBoolean('Armed');
         $ergebnis = null;
-        if ($scharf && $e['ueberfluessig'] > 0) {
+        if ($scharf && $e['ueberfluessig'] > 0 && ($e['verlaesslich'] ?? true)) {
             $weg = [];
             foreach ($e['gruppen'] as $g) {
                 foreach ($g['loeschen'] as $w) {
@@ -271,11 +271,17 @@ class SeriesRecorder extends IPSModule
             $this->aktualisiereDuplikatliste();
         }
 
-        $this->SetValue('Duplikate', sprintf('%s · %d Gruppen, %d ueberfluessig (%s)%s',
+        // Unerreichbare Gruppen zuerst melden: sie sind der Hinweis auf eine
+        // fehlende Freigabe, und der ist wichtiger als jede Vorschlagszahl.
+        $warnung = ((int) ($e['unerreichbar'] ?? 0) > 0)
+            ? sprintf(' · ACHTUNG: %d Gruppen nicht lesbar - Freigabe eingebunden?', $e['unerreichbar'])
+            : '';
+        $this->SetValue('Duplikate', sprintf('%s · %d Gruppen, %d ueberfluessig (%s)%s%s',
             date('d.m. H:i'), $e['gruppen_anzahl'], $e['ueberfluessig'], Duplikate::mb($e['bytes']),
             $ergebnis === null
                 ? ' · nur Vorschlag'
-                : sprintf(' · %d geloescht, %d nicht gefunden', $ergebnis['geloescht'], $ergebnis['fehlend'])));
+                : sprintf(' · %d geloescht, %d nicht gefunden', $ergebnis['geloescht'], $ergebnis['fehlend']),
+            $warnung));
 
         return json_encode(['ok' => true] + $e + ['geloescht' => $ergebnis], JSON_UNESCAPED_UNICODE);
     }
