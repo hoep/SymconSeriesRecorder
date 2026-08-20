@@ -33,7 +33,8 @@ final class Duplikate
     /**
      * @return array{
      *   gruppen:list<array{serie:string,nummer:string,titel:string,behalten:array,loeschen:list<array>,gewinnt:string}>,
-     *   dateien:int, gruppen_anzahl:int, ueberfluessig:int, bytes:int
+     *   dateien:int, gruppen_anzahl:int, ueberfluessig:int, bytes:int,
+     *   unerreichbar:int, verlaesslich:bool
      * }
      */
     public function finde(): array
@@ -42,7 +43,8 @@ final class Duplikate
         $zeilen = 0;
         $fh = @fopen($this->bestandsdatei, 'r');
         if ($fh === false) {
-            return ['gruppen' => [], 'dateien' => 0, 'gruppen_anzahl' => 0, 'ueberfluessig' => 0, 'bytes' => 0];
+            return ['gruppen' => [], 'dateien' => 0, 'gruppen_anzahl' => 0, 'ueberfluessig' => 0,
+                    'bytes' => 0, 'unerreichbar' => 0, 'verlaesslich' => false];
         }
         while (($z = fgets($fh)) !== false) {
             if (!mb_check_encoding($z, 'UTF-8')) {
@@ -84,8 +86,25 @@ final class Duplikate
         $gruppen = [];
         $ueberfluessig = 0;
         $bytes = 0;
+        $unerreichbar = 0;
         foreach ($nach as $liste) {
             if (count($liste) < 2) {
+                continue;
+            }
+            // Eine Gruppe zaehlt nur, wenn ALLE ihre Dateien wirklich da sind.
+            // Haengt die Netzwerkfreigabe nicht, liest die Bestandsliste sich
+            // unveraendert weiter, waehrend filesize() ueberall 0 liefert - dann
+            // waere die Auswahl 'groesste bleibt' geraten und der Vorschlag ein
+            // Blindflug. Lieber gar kein Vorschlag als ein falscher.
+            $fehlt = false;
+            foreach ($liste as $x) {
+                if (!is_file($x['pfad'])) {
+                    $fehlt = true;
+                    break;
+                }
+            }
+            if ($fehlt) {
+                $unerreichbar++;
                 continue;
             }
             // Groesste zuerst; bei Gleichstand die aeltere.
@@ -113,6 +132,10 @@ final class Duplikate
         return [
             'gruppen' => $gruppen, 'dateien' => $zeilen,
             'gruppen_anzahl' => count($gruppen), 'ueberfluessig' => $ueberfluessig, 'bytes' => $bytes,
+            'unerreichbar' => $unerreichbar,
+            // Sind mehr Gruppen unerreichbar als erreichbar, stimmt etwas Grundsaetzliches
+            // nicht - dann ist das Ergebnis kein Vorschlag, sondern eine Warnung.
+            'verlaesslich' => ($unerreichbar === 0 || $unerreichbar < count($gruppen)),
         ];
     }
 
