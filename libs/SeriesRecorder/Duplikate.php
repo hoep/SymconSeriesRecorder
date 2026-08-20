@@ -79,9 +79,12 @@ final class Duplikate
             }
             $nach[$s . '|' . $nummer][] = [
                 'serie' => $serie, 'nummer' => $nummer, 'titel' => $titel,
-                // Groesse des ganzen Satzes, nicht nur des Videos: sie ist es, die
-                // beim Loeschen frei wird, und sie entscheidet, welche Aufnahme bleibt.
-                'pfad' => $pfad, 'groesse' => Dateisatz::groesse($pfad), 'zeit' => (int) @filemtime($pfad),
+                // Beim Einlesen NOCH KEINE Groesse holen. Der Satz einer Aufnahme
+                // umfasst neun Dateien, und ihn zu vermessen heisst, das Verzeichnis
+                // zu lesen - bei 12.500 Zeilen ueber eine Netzwerkfreigabe dauert das
+                // Minuten. Gebraucht wird die Groesse nur dort, wo es wirklich
+                // mehrere Aufnahmen derselben Folge gibt: rund 160 Dateien.
+                'pfad' => $pfad, 'groesse' => 0, 'zeit' => 0,
             ];
         }
         fclose($fh);
@@ -109,6 +112,11 @@ final class Duplikate
             if ($fehlt) {
                 $unerreichbar++;
                 continue;
+            }
+            // Jetzt erst vermessen - fuer die wenigen Faelle, die es angeht.
+            foreach ($liste as $k => $x) {
+                $liste[$k]['groesse'] = Dateisatz::groesse($x['pfad']);
+                $liste[$k]['zeit'] = (int) @filemtime($x['pfad']);
             }
             // Groesste zuerst; bei Gleichstand die aeltere.
             usort($liste, static function (array $a, array $b): int {
