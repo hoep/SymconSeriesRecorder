@@ -13,11 +13,13 @@ require_once __DIR__ . '/../libs/SeriesRecorder/WunschlisteBezug.php';
 require_once __DIR__ . '/../libs/SeriesRecorder/Bestandsscan.php';
 require_once __DIR__ . '/../libs/SeriesRecorder/Receiver.php';
 require_once __DIR__ . '/../libs/SeriesRecorder/Duplikate.php';
+require_once __DIR__ . '/../libs/SeriesRecorder/Dateisatz.php';
 
 use Hoep\SeriesRecorder\Analyse;
 use Hoep\SeriesRecorder\Bedingungen;
 use Hoep\SeriesRecorder\Bestand;
 use Hoep\SeriesRecorder\Bestandsscan;
+use Hoep\SeriesRecorder\Dateisatz;
 use Hoep\SeriesRecorder\Duplikate;
 use Hoep\SeriesRecorder\Episodenkatalog;
 use Hoep\SeriesRecorder\Quellenkette;
@@ -428,19 +430,94 @@ class SeriesRecorder extends IPSModule
                 JSON_UNESCAPED_UNICODE);
         }
 
-        $gr = (int) @filesize($Pfad);
-        if (!@unlink($Pfad)) {
+        // Der ganze Satz geht: Video plus .eit, .nfo, .jpg, -thumb.jpg und die
+        // vier .ts.*-Begleiter. Sonst bleiben je Loeschung sieben Waisen liegen.
+        $d = new Duplikate($this->bestandsdatei());
+        $r = $d->loesche([['pfad' => $Pfad, 'groesse' => 0]]);
+        if ($r['geloescht'] !== 1) {
             $this->SetValue('Duplikate', date('d.m. H:i') . ' · FEHLER beim Loeschen: ' . basename($Pfad));
-            return json_encode(['ok' => false, 'grund' => 'Datei liess sich nicht loeschen'], JSON_UNESCAPED_UNICODE);
+            return json_encode(['ok' => false, 'grund' => 'Datei liess sich nicht loeschen',
+                                'fehler' => $r['fehler']], JSON_UNESCAPED_UNICODE);
         }
         $this->streicheAusListe($index, $Pfad);
-        $this->SetValue('Duplikate', sprintf('%s · geloescht: %s (%s) · es bleibt %s',
-            date('d.m. H:i'), basename($Pfad), Duplikate::mb($gr), basename($bleibt)));
+
+        // Jetzt traegt womoeglich die verbliebene Aufnahme noch den Zaehler des
+        // Receivers ("_001"), obwohl es keine zweite mehr gibt. Das ist genau der
+        // Moment, ihn loszuwerden - mitsamt allen Begleitern.
+        $umbenannt = $this->entzaehlere($bleibt);
+
+        $this->SetValue('Duplikate', sprintf('%s · geloescht: %s (%s, %d Begleitdateien)%s',
+            date('d.m. H:i'), basename($Pfad), Duplikate::mb((int) $r['bytes']), (int) $r['begleiter'],
+            $umbenannt === null ? (' · es bleibt ' . basename($bleibt))
+                                : (' · bleibt jetzt ' . basename($umbenannt))));
 
         return json_encode([
-            'ok' => true, 'geloescht' => 1, 'freigeworden' => Duplikate::mb($gr),
-            'bleibt' => basename($bleibt),
+            'ok' => true, 'geloescht' => 1, 'begleiter' => $r['begleiter'],
+            'freigeworden' => Duplikate::mb((int) $r['bytes']),
+            'bleibt' => basename($umbenannt ?? $bleibt),
+            'umbenannt' => $umbenannt !== null,
         ], JSON_UNESCAPED_UNICODE);
+    }
+
+    /**
+     * Nimmt der verbliebenen Aufnahme den Zaehler des Receivers ab.
+     *
+     * Bleibt nach dem Aufraeumen "…Alptraumpaar_001.ts" uebrig, waehrend es kein
+     * "…Alptraumpaar.ts" mehr gibt, ist der Zaehler nur noch eine Narbe. Er stoert
+     * beim Wiedererkennen (Bestand, Mediatheken) und laesst den Ordner unaufgeraeumt
+     * aussehen. Umbenannt wird der GANZE Satz oder gar nichts.
+     *
+     * @return string|null neuer Pfad, oder null wenn nichts zu tun war
+     */
+    private function entzaehlere(string $pfad): ?string
+    {
+        if (!is_file($pfad)) {
+            return null;
+        }
+        $ziel = Dateisatz::ohneZaehler($pfad);
+        if ($ziel === null) {
+            return null;
+        }
+        $r = Dateisatz::benenneUm($pfad, $ziel);
+        if (!$r['ok']) {
+            return null;
+        }
+        // Der Bestand kennt noch den alten Pfad - beide Zeilen ziehen mit.
+        $this->ersetzeImBestand($pfad, $r['neu']);
+        return $r['neu'];
+    }
+
+    /** Tauscht einen Pfad in der Bestandsliste gegen einen neuen. */
+    private function ersetzeImBestand(string $alt, string $neu): void
+    {
+        $datei = $this->bestandsdatei();
+        $fh = @fopen($datei, 'r');
+        if ($fh === false) {
+            return;
+        }
+        $temp = $datei . '.teil';
+        $out = @fopen($temp, 'w');
+        if ($out === false) {
+            fclose($fh);
+            return;
+        }
+        while (($z = fgets($fh)) !== false) {
+            $u = $z;
+            if (!mb_check_encoding($u, 'UTF-8')) {
+                $u = mb_convert_encoding($u, 'UTF-8', 'ISO-8859-1');
+            }
+            $p = trim((string) substr($u, (int) strrpos($u, '|') + 1));
+            if ($p === $alt) {
+                // Auch der Dateiname in der vorletzten Spalte traegt den Zaehler.
+                $u = str_replace([basename($alt), $alt], [basename($neu), $neu], $u);
+                fwrite($out, rtrim($u, "\r\n") . "\n");
+                continue;
+            }
+            fwrite($out, $z);
+        }
+        fclose($fh);
+        fclose($out);
+        @rename($temp, $datei);
     }
 
     /**
