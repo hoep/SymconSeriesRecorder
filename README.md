@@ -206,3 +206,38 @@ Zuordnung soll oefter laufen.
 **Zur URL der Programmvorschau:** Im Altskript stehen drei, zwei davon
 auskommentiert. Die abgeschaltete `epg.xmltv.host` antwortet heute mit HTTP 522,
 die aktive `epg.best` mit 200 in 3,8 s. Als Property ist sichtbar, welche gilt.
+
+## Bestandsscan
+
+Durchsucht die Aufnahmeverzeichnisse und schreibt die Bestandsliste im Format
+des Altsystems (`lfd|Serie|S01E01|Titel|Pfad`), damit beide Fassungen dieselbe
+Liste lesen koennen. Gemessen: **12.552 Aufnahmen in 202 Serien, 8,2 s** ueber
+die CIFS-Freigabe.
+
+**Zwei Unterschiede zum Original, beide aus Schaden gelernt:**
+
+Das Original loescht die alte Liste als ERSTES und schreibt dann neu. Ist die
+Freigabe in dem Moment nicht eingebunden, bleibt eine leere Datei zurueck - und
+eine leere Bestandsliste heisst fuer die Entscheidung "nichts ist vorhanden".
+Der naechste Lauf wuerde alles erneut aufnehmen. Hier wird in eine Nebendatei
+geschrieben, geprueft und erst dann uebernommen; bei zu wenigen Funden bleibt
+die alte Liste stehen. Nachgestellt und bestaetigt: bei unerreichbarem
+Verzeichnis blieb die vorhandene Liste unangetastet.
+
+Das Original entfernt ausserdem alle Unterstriche aus dem Dateinamen
+(`str_replace("_","")`) - und speichert diesen veraenderten Namen als PFAD.
+Dateien, die tatsaechlich einen Unterstrich tragen (der Receiver setzt ihn fuer
+Doppelpunkte: `Magnum P_I_`), sind damit unter einem Pfad verzeichnet, den es
+nicht gibt. In einer Stichprobe von 300 Zeilen:
+
+    Altsystem   9 von 300 Pfaden zeigen ins Leere
+    Modul       0 von 300
+
+Fuer die reine Existenzpruefung faellt das nicht auf, weil die Vergleichsform
+Unterstriche ohnehin entfernt. Fuer alles, was die Datei ANFASST - loeschen,
+umbenennen - ist es ein Fehler.
+
+Nicht uebernommen wurde `mount -a`: Das Original ruft es auf, wenn der Scan
+fast nichts findet. Eine Freigabe einzuhaengen ist ein Eingriff ins
+Betriebssystem und gehoert nicht in einen Lesevorgang - das Modul meldet den
+Verdacht und ueberlaesst die Entscheidung.
