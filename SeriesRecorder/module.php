@@ -302,7 +302,10 @@ class SeriesRecorder extends IPSModule
     {
         $d = new Duplikate($this->bestandsdatei());
         $e = $d->finde();
-        $zeilen = [['Serie', 'Folge', 'Titel', 'Behalten', 'Groesse', 'Loeschen', 'Frei', '_Pfad']];
+        // _Pfad ist der Loeschkandidat, _Bleibt die Kopie, die bleiben soll. Beide
+        // versteckt: die Tabelle zeigt Dateinamen, der Knopf braucht Pfade - und
+        // die Pruefung beim Klick braucht den Beleg, dass die Kopie noch da ist.
+        $zeilen = [['Serie', 'Folge', 'Titel', 'Behalten', 'Groesse', 'Loeschen', 'Frei', '_Pfad', '_Bleibt']];
         foreach ($e['gruppen'] as $g) {
             foreach ($g['loeschen'] as $w) {
                 $zeilen[] = [
@@ -312,6 +315,7 @@ class SeriesRecorder extends IPSModule
                     self::kurzerName((string) $w['pfad'], (string) $g['serie']),
                     Duplikate::mb((int) $w['groesse']),
                     (string) $w['pfad'],
+                    (string) $g['behalten']['pfad'],
                 ];
             }
         }
@@ -380,47 +384,77 @@ class SeriesRecorder extends IPSModule
         if ($Pfad === '') {
             return json_encode(['ok' => false, 'grund' => 'kein Pfad']);
         }
-        $d = new Duplikate($this->bestandsdatei());
-        $e = $d->finde();
+        // Die Liste liegt vor - sie noch einmal komplett durchzurechnen kostete
+        // acht Sekunden ueber die Netzwerkfreigabe, und in der Zeit sieht der
+        // Anwender nichts passieren. Gebraucht wird ohnehin nur zweierlei: steht
+        // die Datei als ueberfluessig in der Liste, und ist die Kopie, die sie
+        // ueberfluessig macht, wirklich noch da?
+        $liste = json_decode((string) @$this->GetValue('DuplikateListe'), true);
+        if (!is_array($liste) || count($liste) < 2) {
+            return json_encode(['ok' => false, 'grund' => 'keine Liste vorhanden - bitte einmal pruefen lassen'],
+                JSON_UNESCAPED_UNICODE);
+        }
 
         $treffer = null;
-        foreach ($e['gruppen'] as $g) {
-            foreach ($g['loeschen'] as $w) {
-                if ((string) $w['pfad'] === $Pfad) {
-                    $treffer = ['weg' => $w, 'bleibt' => $g['behalten']];
-                    break 2;
-                }
+        $index = 0;
+        foreach ($liste as $n => $z) {
+            if ($n === 0 || !is_array($z) || count($z) < 9) {
+                continue;
+            }
+            if ((string) $z[7] === $Pfad) {
+                $treffer = $z;
+                $index = $n;
+                break;
             }
         }
         if ($treffer === null) {
-            $this->SetValue('Duplikate', date('d.m. H:i') . ' · abgelehnt: steht nicht mehr als ueberfluessig in der Liste');
+            $this->SetValue('Duplikate', date('d.m. H:i') . ' · abgelehnt: steht nicht in der Liste');
+            return json_encode(['ok' => false, 'grund' => 'Diese Datei steht nicht als ueberfluessig in der Liste.'],
+                JSON_UNESCAPED_UNICODE);
+        }
+        $bleibt = (string) $treffer[8];
+        if ($bleibt === '' || !is_file($bleibt)) {
+            $this->SetValue('Duplikate', date('d.m. H:i') . ' · abgelehnt: die zu behaltende Kopie fehlt');
             return json_encode([
                 'ok' => false,
-                'grund' => 'Diese Datei steht in der aktuellen Pruefung nicht als ueberfluessig. '
-                         . 'Bitte erst neu pruefen.',
-                'pfad' => $Pfad,
+                'grund' => 'Die Kopie, die bleiben soll, ist nicht auffindbar - dann waere dies die letzte.',
+                'bleibt' => $bleibt,
             ], JSON_UNESCAPED_UNICODE);
         }
-
-        $r = $d->loesche([$treffer['weg']]);
-        $ok = $r['geloescht'] === 1;
-        if ($ok) {
-            // Erst aus dem Bestand streichen, dann die Liste neu rechnen: sonst
-            // stuende die Zeile bis zum naechsten Scan weiter im Vorschlag.
-            $this->entferneAusBestand($Pfad);
-            $this->aktualisiereDuplikatliste();
+        if (!is_file($Pfad)) {
+            // Schon weg: Zeile trotzdem aus der Liste nehmen, damit sie nicht stehen bleibt.
+            $this->streicheAusListe($index, $Pfad);
+            return json_encode(['ok' => true, 'grund' => 'war bereits geloescht', 'geloescht' => 0],
+                JSON_UNESCAPED_UNICODE);
         }
-        $this->SetValue('Duplikate', sprintf('%s · %s: %s (%s)%s',
-            date('d.m. H:i'), $ok ? 'geloescht' : 'FEHLER', basename($Pfad),
-            Duplikate::mb((int) $treffer['weg']['groesse']),
-            $ok ? ' · es bleibt ' . basename((string) $treffer['bleibt']['pfad']) : ''));
 
-        // Die Bestandsliste ist jetzt veraltet - der naechste Scan zieht nach.
+        $gr = (int) @filesize($Pfad);
+        if (!@unlink($Pfad)) {
+            $this->SetValue('Duplikate', date('d.m. H:i') . ' · FEHLER beim Loeschen: ' . basename($Pfad));
+            return json_encode(['ok' => false, 'grund' => 'Datei liess sich nicht loeschen'], JSON_UNESCAPED_UNICODE);
+        }
+        $this->streicheAusListe($index, $Pfad);
+        $this->SetValue('Duplikate', sprintf('%s · geloescht: %s (%s) · es bleibt %s',
+            date('d.m. H:i'), basename($Pfad), Duplikate::mb($gr), basename($bleibt)));
+
         return json_encode([
-            'ok' => $ok, 'geloescht' => $r['geloescht'], 'fehler' => $r['fehler'],
-            'freigeworden' => Duplikate::mb($r['bytes']),
-            'bleibt' => basename((string) $treffer['bleibt']['pfad']),
+            'ok' => true, 'geloescht' => 1, 'freigeworden' => Duplikate::mb($gr),
+            'bleibt' => basename($bleibt),
         ], JSON_UNESCAPED_UNICODE);
+    }
+
+    /**
+     * Nimmt eine Zeile aus der Anzeigeliste und die Datei aus dem Bestand.
+     * Beides sind reine Textoperationen - kein Dateisystemlauf, keine Wartezeit.
+     */
+    private function streicheAusListe(int $index, string $pfad): void
+    {
+        $liste = json_decode((string) @$this->GetValue('DuplikateListe'), true);
+        if (is_array($liste) && isset($liste[$index])) {
+            unset($liste[$index]);
+            $this->SetValue('DuplikateListe', json_encode(array_values($liste), JSON_UNESCAPED_UNICODE));
+        }
+        $this->entferneAusBestand($pfad);
     }
 
     /**
