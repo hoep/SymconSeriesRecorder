@@ -78,6 +78,10 @@ class SeriesRecorder extends IPSModule
         // Untergrenze gegen den Fall einer nicht eingebundenen Freigabe: darunter
         // gilt der Scan als fehlgeschlagen und die alte Liste bleibt stehen.
         $this->RegisterPropertyInteger('ScanMindestens', 50);
+        // Findet der Scan fast nichts, ist meist die Netzwerkfreigabe abgerissen.
+        // Das Altsystem ruft dann 'mount -a'; hier ist es abschaltbar, weil es der
+        // einzige Punkt ist, an dem das Modul ins Betriebssystem greift.
+        $this->RegisterPropertyBoolean('FreigabeEinbinden', true);
         // Receiver: in diesem Stand NUR zum Lesen der Timerliste.
         $this->RegisterPropertyString('ReceiverIp', '');
         $this->RegisterPropertyString('ReceiverBouquet', '');
@@ -420,6 +424,35 @@ class SeriesRecorder extends IPSModule
     }
 
     /**
+     * Versucht, die Netzwerkfreigaben wieder einzuhaengen.
+     *
+     * Der einzige Punkt, an dem dieses Modul das Betriebssystem anfasst -
+     * deshalb abschaltbar und mit festem Befehl ohne jede Eingabe von aussen.
+     * Symcon laeuft hier als root; wo das nicht so ist, geht es ueber sudo,
+     * das dann passwortlos erlaubt sein muss.
+     *
+     * @return array{ok:bool,meldung:string}
+     */
+    private function bindeFreigabeEin(): array
+    {
+        if (!$this->ReadPropertyBoolean('FreigabeEinbinden')) {
+            return ['ok' => false, 'meldung' => 'automatisches Einbinden ist abgeschaltet'];
+        }
+        if (!function_exists('shell_exec')) {
+            return ['ok' => false, 'meldung' => 'shell_exec steht nicht zur Verfuegung'];
+        }
+        $alsRoot = (function_exists('posix_geteuid') && posix_geteuid() === 0);
+        $befehl = ($alsRoot ? 'mount -a' : 'sudo -n mount -a') . ' 2>&1';
+        $aus = trim((string) @shell_exec($befehl));
+        // Der Einhaengevorgang braucht einen Moment, bis das Verzeichnis traegt.
+        sleep(2);
+        return [
+            'ok' => true,
+            'meldung' => 'mount -a ausgefuehrt' . ($aus !== '' ? (': ' . mb_substr($aus, 0, 200)) : ''),
+        ];
+    }
+
+    /**
      * Nimmt den Bestand auf der Platte auf. Rein lesend bis auf die eigene
      * Liste; loescht und benennt nichts um.
      */
@@ -429,9 +462,26 @@ class SeriesRecorder extends IPSModule
             explode(',', $this->ReadPropertyString('Aufnahmepfade')))));
         $s = new Bestandsscan($pfade, ['ts', 'mkv', 'mp4'],
             max(1, $this->ReadPropertyInteger('ScanMindestens')));
-        $e = $s->lauf($this->pfad('ScanZiel'), rtrim($this->ReadPropertyString('Datenpfad'), '/') . '/serien-sr.txt');
-        $this->SetValue('Bestand', sprintf('%s · %s · %d Aufnahmen, %d Serien · %.1f s',
-            date('d.m. H:i'), $e['meldung'], $e['dateien'], $e['serien'], $e['dauerMs'] / 1000));
+        $serienDatei = rtrim($this->ReadPropertyString('Datenpfad'), '/') . '/serien-sr.txt';
+        $e = $s->lauf($this->pfad('ScanZiel'), $serienDatei);
+
+        // Zu wenige Funde heisst fast immer: die Freigabe haengt nicht. Einmal
+        // einbinden und genau EINMAL nachfassen - laeuft es wieder nicht, bleibt
+        // es dabei, statt sich im Kreis zu drehen.
+        $nachgefasst = '';
+        if (!$e['ok'] && $this->ReadPropertyBoolean('FreigabeEinbinden')) {
+            $m = $this->bindeFreigabeEin();
+            if ($m['ok']) {
+                $s2 = new Bestandsscan($pfade, ['ts', 'mkv', 'mp4'],
+                    max(1, $this->ReadPropertyInteger('ScanMindestens')));
+                $e = $s2->lauf($this->pfad('ScanZiel'), $serienDatei);
+                $nachgefasst = ' · nach ' . $m['meldung'] . ' erneut versucht';
+            } else {
+                $nachgefasst = ' · ' . $m['meldung'];
+            }
+        }
+        $this->SetValue('Bestand', sprintf('%s · %s · %d Aufnahmen, %d Serien · %.1f s%s',
+            date('d.m. H:i'), $e['meldung'], $e['dateien'], $e['serien'], $e['dauerMs'] / 1000, $nachgefasst));
         return json_encode($e, JSON_UNESCAPED_UNICODE);
     }
 
@@ -503,6 +553,7 @@ class SeriesRecorder extends IPSModule
                 ['type' => 'ValidationTextBox', 'name' => 'Aufnahmepfade', 'caption' => 'Aufnahmeverzeichnisse (mit Komma trennen)'],
                 ['type' => 'ValidationTextBox', 'name' => 'ScanZiel', 'caption' => 'Bestandsliste (eigene)'],
                 ['type' => 'NumberSpinner', 'name' => 'ScanMindestens', 'caption' => 'Weniger Funde = Scan gilt als fehlgeschlagen', 'minimum' => 1, 'maximum' => 100000],
+                ['type' => 'CheckBox', 'name' => 'FreigabeEinbinden', 'caption' => 'Bei zu wenigen Funden "mount -a" versuchen und einmal nachfassen'],
                 ['type' => 'Label', 'caption' => '— Receiver: wird in diesem Stand NUR gelesen (programmierte Aufnahmen) —'],
                 ['type' => 'ValidationTextBox', 'name' => 'ReceiverIp', 'caption' => 'Adresse'],
                 ['type' => 'ValidationTextBox', 'name' => 'ReceiverBouquet', 'caption' => 'Bouquet (optional)'],
