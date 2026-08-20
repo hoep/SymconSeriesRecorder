@@ -100,3 +100,43 @@ die Phasen 2 und 3 da.
 Wichtig fuer den Parallellauf: das Altsystem entscheidet je Ausstrahlung
 zusaetzlich Vorhanden / Mehrfach / Programmiert / Unklar. Solange das Modul das
 nicht kann, vergleicht man nur die Trefferliste, nicht die Entscheidung.
+
+## Phase 2a: die Entscheidung
+
+Der Lauf sagt jetzt nicht nur "was laeuft", sondern auch **was fehlt**. Vier
+Urteile, und die Reihenfolge der Pruefungen ist die eigentliche Aussage:
+
+    1. schon einmal in dieser Liste?  -> mehrfach   (nur die erste zaehlt)
+    2. liegt auf der Platte?          -> vorhanden
+    3. weder Nummer noch Titel?       -> unklar
+    4. sonst                          -> aufnehmen
+
+Punkt 1 vor Punkt 2 war beim ersten Anlauf vertauscht. Fachlich fuehren beide
+zu "nicht aufnehmen", aber die Zahlen waeren nicht mehr mit dem Altsystem
+vergleichbar gewesen - und genau darauf beruht der Parallellauf.
+
+Der Bestand wird ueber ZWEI Schluessel gesucht, Nummer und Episodentitel. Das
+ist kein Luxus: fuer 14 der 417 Ausstrahlungen liefert das EPG kein S/E, und
+Tatort fuehrt im Bestand die Staffel als JAHR ("S2023E26") - ueber Nummern ist
+dort nichts wiederzufinden.
+
+## Vergleich der Entscheidungen (417 Ausstrahlungen des Altsystems)
+
+    Etikett gleich:            388 von 413 (93,9 %)
+    nur ALT wuerde aufnehmen:    1
+    nur NEU wuerde aufnehmen:    7
+
+Die eine Aufnahme, die nur das Altsystem machen wuerde, ist **Tatort "Liebe
+mich"** - die Folge liegt laengst auf der Platte
+(`Tatort - S2022E07 - Faber - 22 - Liebe mich!.ts`). Das Altsystem findet sie
+nicht und wuerde sie ein zweites Mal aufzeichnen.
+
+Von den sieben, die nur das Modul aufnehmen wuerde, sind drei bereits am
+Receiver programmiert (das weiss nur der Receiver - Phase 3) und vier sind
+Tatorte, die die Bedingungsregel des Altsystems ohnehin verwirft. Die Regeln
+selbst fehlen dem Modul noch.
+
+Die uebrigen 24 Etikett-Abweichungen sind ein Sortier-Unterschied: bei zwei
+Ausstrahlungen derselben Folge nennt das Altsystem die in SEINER
+Verarbeitungsreihenfolge erste "vorhanden", das Modul die zeitlich fruehere.
+Beide Etiketten bedeuten "nicht aufnehmen".

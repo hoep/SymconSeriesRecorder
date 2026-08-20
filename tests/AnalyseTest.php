@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 require __DIR__.'/../libs/SeriesRecorder/Analyse.php';
-use Hoep\SeriesRecorder\{Analyse, XmltvLeser};
+use Hoep\SeriesRecorder\{Analyse, XmltvLeser, Bestand};
 
 $d='/var/lib/symcon/serienrecorder/';
 $fav = json_decode(preg_replace('/^\xEF\xBB\xBF/','',file_get_contents($d.'favorites.xml')),true);
@@ -16,7 +16,7 @@ $kanaltab=[]; foreach ($km as $x) { $kanaltab[$x[1]]=$x[2]; }
 
 $leser = new XmltvLeser($d.'xmltv.xml');
 printf("XMLTV vorhanden: %s, Alter %.1f h\n", $leser->vorhanden()?'ja':'nein', ($leser->alter()??0)/3600);
-$a = new Analyse($favoriten,$aliase,$ablage,$empfang,$kanaltab);
+$a = new Analyse($favoriten,$aliase,$ablage,$empfang,$kanaltab,new Bestand($d."recordings.txt"));
 $speicherVor = memory_get_peak_usage(true);
 $e = $a->lauf($leser);
 printf("Dauer %d ms, Spitzenspeicher %.1f MB\n", $e['dauerMs'], memory_get_peak_usage(true)/1048576);

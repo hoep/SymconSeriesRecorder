@@ -1,0 +1,89 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Hoep\SeriesRecorder;
+
+require_once __DIR__ . '/Bestand.php';
+require_once __DIR__ . '/EpisodenNummer.php';
+
+/**
+ * Was soll mit einer Ausstrahlung geschehen?
+ *
+ * Die Reihenfolge der Pruefungen ist die eigentliche Aussage - sie entscheidet,
+ * welches Etikett eine Sendung bekommt, die mehrere Kriterien erfuellt:
+ *
+ *   1. Schon einmal in dieser Liste?  -> MEHRFACH (nur die erste Ausstrahlung zaehlt)
+ *   2. Liegt sie auf der Platte?      -> VORHANDEN
+ *   3. Weder Nummer noch Titel?       -> UNKLAR
+ *   4. sonst                          -> AUFNEHMEN
+ *
+ * Punkt 1 vor Punkt 2 ist wichtig und war beim ersten Anlauf vertauscht: laeuft
+ * eine bereits vorhandene Folge zweimal, nennt das Altsystem die erste
+ * "vorhanden" und die zweite "mehrfach". Andersherum haetten beide "vorhanden"
+ * geheissen - fachlich fast dasselbe, aber die Zahlen im Bericht waeren nicht
+ * mehr mit dem Altsystem vergleichbar gewesen, und genau darauf beruht der
+ * Parallellauf.
+ */
+final class Entscheidung
+{
+    public const AUFNEHMEN = 'aufnehmen';
+    public const VORHANDEN = 'vorhanden';
+    public const MEHRFACH  = 'mehrfach';
+    public const UNKLAR    = 'unklar';
+
+    /** @var array<string,true> bereits gesehene Folgen dieses Laufs */
+    private array $gesehen = [];
+
+    public function __construct(private Bestand $bestand)
+    {
+    }
+
+    /** Vor jedem Durchlauf zuruecksetzen - "mehrfach" gilt je Lauf, nicht ewig. */
+    public function beginneLauf(): void
+    {
+        $this->gesehen = [];
+    }
+
+    /**
+     * @param array{serie:string,titel:string,untertitel?:string,folgeNum?:string} $sendung
+     * @return array{urteil:string,staffel:int,folge:int,quelle:string,grund:string,dateien:list<string>}
+     */
+    public function fuer(array $sendung): array
+    {
+        $serie = (string) $sendung['serie'];
+        $eptitel = trim((string) ($sendung['untertitel'] ?? ''));
+
+        $n = EpisodenNummer::bestimme(
+            (string) ($sendung['folgeNum'] ?? ''),
+            (string) $sendung['titel'],
+            $eptitel
+        );
+        $st = $n['staffel'];
+        $fo = $n['folge'];
+
+        $ergebnis = fn(string $u, string $grund, array $dateien = []) => [
+            'urteil' => $u, 'staffel' => $st, 'folge' => $fo,
+            'quelle' => $n['quelle'], 'grund' => $grund, 'dateien' => $dateien,
+        ];
+
+        // Ohne jede Kennung ist die Folge nicht wiedererkennbar. Sie hier
+        // aufzunehmen hiesse, sie bei jeder Wiederholung erneut aufzunehmen.
+        if ($st === 0 && $fo === 0 && $eptitel === '') {
+            return $ergebnis(self::UNKLAR, 'weder Staffel/Folge noch Episodentitel im EPG');
+        }
+
+        $schluessel = Bestand::form($serie) . '|' . $st . '|' . $fo . '|' . Bestand::form($eptitel);
+        if (isset($this->gesehen[$schluessel])) {
+            return $ergebnis(self::MEHRFACH, 'laeuft in diesem Zeitraum erneut');
+        }
+        $this->gesehen[$schluessel] = true;
+
+        $t = $this->bestand->suche($serie, $st, $fo, $eptitel);
+        if ($t['da']) {
+            return $ergebnis(self::VORHANDEN, 'liegt bereits vor (' . $t['weg'] . ')', $t['dateien']);
+        }
+
+        return $ergebnis(self::AUFNEHMEN, 'fehlt im Bestand');
+    }
+}

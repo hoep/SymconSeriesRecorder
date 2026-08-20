@@ -7,6 +7,7 @@ namespace Hoep\SeriesRecorder;
 require_once __DIR__ . '/TitelResolver.php';
 require_once __DIR__ . '/KanalMapper.php';
 require_once __DIR__ . '/XmltvLeser.php';
+require_once __DIR__ . '/Entscheidung.php';
 
 /**
  * Der lesende Durchlauf: welche Ausstrahlungen der Wunschliste stehen an?
@@ -28,6 +29,7 @@ final class Analyse
         private array $ablagenamen,
         private array $empfangbar,
         private array $kanalTabelle,
+        private ?Bestand $bestand = null,
     ) {
     }
 
@@ -56,6 +58,12 @@ final class Analyse
             $kanal[$id] = $t === null ? null : $t['kanal'];
         }
 
+        // Ohne Bestandsliste bleibt es beim "was laeuft" - die Entscheidung, ob eine
+        // Folge fehlt, braucht die Platte. Beides getrennt, damit der Lauf auch dann
+        // etwas liefert, wenn der Scanner gerade nichts geschrieben hat.
+        $urteiler = $this->bestand !== null ? new Entscheidung($this->bestand) : null;
+        $urteiler?->beginneLauf();
+
         $treffer = [];
         $z = ['geprueft' => 0, 'zugeordnet' => 0, 'ohne Favorit' => 0, 'Sender nicht empfangbar' => 0];
         $verworfeneSender = [];
@@ -74,6 +82,15 @@ final class Analyse
                 continue;
             }
             $z['zugeordnet']++;
+            $u = $urteiler?->fuer([
+                'serie'      => $t['ablage'],
+                'titel'      => $s['titel'],
+                'untertitel' => $s['untertitel'],
+                'folgeNum'   => $s['folge'],
+            ]);
+            if ($u !== null) {
+                $z[$u['urteil']] = ($z[$u['urteil']] ?? 0) + 1;
+            }
             $treffer[] = [
                 'kanal'  => $kanal[$s['kanal']],
                 'sender' => $sender[$s['kanal']] ?? $s['kanal'],
@@ -83,6 +100,10 @@ final class Analyse
                 'ende'   => $s['ende'],
                 'folge'  => $s['folge'],
                 'regel'  => $t['regel'],
+                'urteil' => $u['urteil'] ?? '',
+                'grund'  => $u['grund'] ?? '',
+                'staffelFolge' => ($u !== null && ($u['staffel'] > 0 || $u['folge'] > 0))
+                                    ? Bestand::nummer($u['staffel'], $u['folge']) : '',
             ];
         }
         usort($treffer, static fn(array $a, array $b): int => $a['start'] <=> $b['start']);
@@ -110,7 +131,7 @@ final class Analyse
      */
     public static function alsTabelle(array $sendungen): array
     {
-        $out = [['_ts', 'Datum', 'Start', 'Ende', 'Serie', 'Titel', 'Sender', 'Regel']];
+        $out = [['_ts', 'Datum', 'Start', 'Ende', 'Serie', 'Folge', 'Titel', 'Sender', 'Urteil', 'Grund']];
         foreach ($sendungen as $s) {
             $out[] = [
                 (string) $s['start'],
@@ -118,9 +139,11 @@ final class Analyse
                 date('H:i', (int) $s['start']),
                 $s['ende'] > 0 ? date('H:i', (int) $s['ende']) : '',
                 (string) $s['serie'],
+                (string) ($s['staffelFolge'] ?? ''),
                 (string) $s['titel'],
                 (string) $s['sender'],
-                (string) $s['regel'],
+                (string) ($s['urteil'] ?? ''),
+                (string) ($s['grund'] ?? ''),
             ];
         }
         return $out;

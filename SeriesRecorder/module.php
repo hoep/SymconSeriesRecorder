@@ -5,6 +5,7 @@ declare(strict_types=1);
 require_once __DIR__ . '/../libs/SeriesRecorder/Analyse.php';
 
 use Hoep\SeriesRecorder\Analyse;
+use Hoep\SeriesRecorder\Bestand;
 use Hoep\SeriesRecorder\KanalMapper;
 use Hoep\SeriesRecorder\TitelResolver;
 use Hoep\SeriesRecorder\XmltvLeser;
@@ -35,6 +36,7 @@ class SeriesRecorder extends IPSModule
         $this->RegisterPropertyString('XmltvDatei', 'xmltv.xml');
         $this->RegisterPropertyString('FavoritenDatei', 'favorites.xml');
         $this->RegisterPropertyString('KanaeleDatei', 'channels.json');
+        $this->RegisterPropertyString('BestandDatei', 'recordings.txt');
         $this->RegisterPropertyInteger('Vorschau', 14);           // Tage nach vorn
 
         // Regeln als Daten, nicht als Code. In der Skript-Fassung standen sie als
@@ -55,6 +57,7 @@ class SeriesRecorder extends IPSModule
         $this->RegisterVariableInteger('Dauer', 'Dauer (ms)', '', 30);
         $this->RegisterVariableInteger('Zugeordnet', 'Zugeordnete Ausstrahlungen', '', 40);
         $this->RegisterVariableInteger('OhneEmpfang', 'Verworfen (Sender fehlt)', '', 50);
+        $this->RegisterVariableInteger('Aufnehmen', 'Fehlt im Bestand', '', 55);
         $this->RegisterVariableString('Ausstrahlungen', 'Ausstrahlungen (JSON)', '', 60);
         $this->RegisterVariableString('OffeneSender', 'Sender ohne Empfangskanal', '', 70);
 
@@ -92,12 +95,14 @@ class SeriesRecorder extends IPSModule
 
         $this->SetValue('Zugeordnet', (int) ($e['kennzahlen']['zugeordnet'] ?? 0));
         $this->SetValue('OhneEmpfang', (int) ($e['kennzahlen']['Sender nicht empfangbar'] ?? 0));
+        $this->SetValue('Aufnehmen', (int) ($e['kennzahlen']['aufnehmen'] ?? 0));
         $this->SetValue('Dauer', $e['dauerMs']);
         $this->SetValue('LetzterLauf', time());
         $this->SetValue('Ausstrahlungen', json_encode(Analyse::alsTabelle($e['sendungen']), JSON_UNESCAPED_UNICODE));
         $this->SetValue('OffeneSender', implode("\n", $e['offeneSender']));
-        $this->SetValue('Status', sprintf('%d Ausstrahlungen, %d Serien, %d ms%s',
+        $this->SetValue('Status', sprintf('%d Ausstrahlungen, davon %d fehlend; %d Serien, %d ms%s',
             $e['kennzahlen']['zugeordnet'] ?? 0,
+            $e['kennzahlen']['aufnehmen'] ?? 0,
             $e['kennzahlen']['Serien mit Ausstrahlung'] ?? 0,
             $e['dauerMs'],
             $this->ReadPropertyBoolean('Armed') ? '' : ' (nur lesend)'));
@@ -143,6 +148,7 @@ class SeriesRecorder extends IPSModule
                 ['type' => 'ValidationTextBox', 'name' => 'XmltvDatei', 'caption' => 'XMLTV'],
                 ['type' => 'ValidationTextBox', 'name' => 'FavoritenDatei', 'caption' => 'Wunschliste'],
                 ['type' => 'ValidationTextBox', 'name' => 'KanaeleDatei', 'caption' => 'Empfangbare Kanaele'],
+                ['type' => 'ValidationTextBox', 'name' => 'BestandDatei', 'caption' => 'Aufnahmen auf der Platte'],
                 ['type' => 'Label', 'caption' => $hinweis],
                 ['type' => 'Label', 'caption' => '— Sender: XMLTV-Name auf Empfangskanal —'],
                 ['type' => 'List', 'name' => 'Kanaltabelle', 'caption' => 'Nur Ausnahmen; gleiche Namen finden sich von selbst',
@@ -183,7 +189,8 @@ class SeriesRecorder extends IPSModule
     private function baueAnalyse(): Analyse
     {
         $tt = $this->titeltabelle();
-        return new Analyse($this->favoriten(), $tt['aliase'], $tt['ablage'], $this->empfangbar(), $this->kanaltabelle());
+        return new Analyse($this->favoriten(), $tt['aliase'], $tt['ablage'], $this->empfangbar(),
+            $this->kanaltabelle(), new Bestand($this->pfad('BestandDatei')));
     }
 
     private function pfad(string $property): string
@@ -195,7 +202,7 @@ class SeriesRecorder extends IPSModule
     private function fehlendeDateien(): array
     {
         $fehlt = [];
-        foreach (['XmltvDatei', 'FavoritenDatei', 'KanaeleDatei'] as $p) {
+        foreach (['XmltvDatei', 'FavoritenDatei', 'KanaeleDatei', 'BestandDatei'] as $p) {
             if (!is_readable($this->pfad($p))) {
                 $fehlt[] = $this->ReadPropertyString($p);
             }
