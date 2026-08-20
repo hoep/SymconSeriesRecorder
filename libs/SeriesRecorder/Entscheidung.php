@@ -7,6 +7,7 @@ namespace Hoep\SeriesRecorder;
 require_once __DIR__ . '/Bestand.php';
 require_once __DIR__ . '/EpisodenNummer.php';
 require_once __DIR__ . '/Bedingungen.php';
+require_once __DIR__ . '/Episodenkatalog.php';
 
 /**
  * Was soll mit einer Ausstrahlung geschehen?
@@ -41,6 +42,7 @@ final class Entscheidung
     public function __construct(
         private Bestand $bestand,
         private ?Bedingungen $bedingungen = null,
+        private ?Episodenkatalog $katalog = null,
     ) {
     }
 
@@ -66,10 +68,25 @@ final class Entscheidung
         );
         $st = $n['staffel'];
         $fo = $n['folge'];
+        $quelle = $n['quelle'];
+
+        // Liefert das EPG keine brauchbare Nummer, im Episodenkatalog nachschlagen.
+        // Das ist derselbe Weg, den die Skript-Fassung ueber TheTVDB geht - nur aus
+        // dem Cache, den sie dabei angelegt hat. Ohne diesen Schritt bleibt eine
+        // ganze Serie unentscheidbar: fuer Tatort liefert das EPG NIE Staffel und
+        // Folge, im Bestand liegt sie aber unter S2023E26.
+        if ($this->katalog !== null && $st === 0 && $eptitel !== '') {
+            $k = $this->katalog->finde($serie, $eptitel);
+            if ($k !== null) {
+                $st = $k['staffel'];
+                $fo = $k['folge'];
+                $quelle = 'katalog';
+            }
+        }
 
         $ergebnis = fn(string $u, string $grund, array $dateien = []) => [
             'urteil' => $u, 'staffel' => $st, 'folge' => $fo,
-            'quelle' => $n['quelle'], 'grund' => $grund, 'dateien' => $dateien,
+            'quelle' => $quelle, 'grund' => $grund, 'dateien' => $dateien,
         ];
 
         // Ohne jede Kennung ist die Folge nicht wiedererkennbar. Sie hier

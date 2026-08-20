@@ -7,6 +7,7 @@ require_once __DIR__ . '/../libs/SeriesRecorder/Analyse.php';
 use Hoep\SeriesRecorder\Analyse;
 use Hoep\SeriesRecorder\Bedingungen;
 use Hoep\SeriesRecorder\Bestand;
+use Hoep\SeriesRecorder\Episodenkatalog;
 use Hoep\SeriesRecorder\KanalMapper;
 use Hoep\SeriesRecorder\TitelResolver;
 use Hoep\SeriesRecorder\XmltvLeser;
@@ -39,6 +40,7 @@ class SeriesRecorder extends IPSModule
         $this->RegisterPropertyString('KanaeleDatei', 'channels.json');
         $this->RegisterPropertyString('BestandDatei', 'recordings.txt');
         $this->RegisterPropertyInteger('Vorschau', 14);           // Tage nach vorn
+        $this->RegisterPropertyBoolean('Katalog', true);          // Episodennummern aus dem TVDB-Cache
 
         // Regeln als Daten, nicht als Code. In der Skript-Fassung standen sie als
         // PHP-Literale mitten im Ablauf - deshalb hat auch nie jemand bemerkt, dass
@@ -123,6 +125,18 @@ class SeriesRecorder extends IPSModule
         return json_encode($t ?? ['favorit' => null, 'grund' => 'kein Kandidat ueber der Schwelle'], JSON_UNESCAPED_UNICODE);
     }
 
+    /** Diagnose: welche Nummer kennt der Episoden-Cache zu dieser Folge? */
+    public function KatalogProbe(string $Serie, string $Episodentitel): string
+    {
+        $k = new Episodenkatalog($this->ReadPropertyString('Datenpfad'));
+        $t = $k->finde($Serie, $Episodentitel);
+        return json_encode([
+            'serien'   => $k->serien(),
+            'episoden' => $k->episoden(),
+            'treffer'  => $t,
+        ], JSON_UNESCAPED_UNICODE);
+    }
+
     /** Diagnose: greift fuer diese Folge eine Serien-Schranke? */
     public function RegelProbe(string $Serie, int $Staffel, int $Folge): string
     {
@@ -153,6 +167,7 @@ class SeriesRecorder extends IPSModule
                 ['type' => 'CheckBox', 'name' => 'Armed', 'caption' => 'Scharf (schaltet Timer am Receiver - in diesem Stand ohne Wirkung)'],
                 ['type' => 'NumberSpinner', 'name' => 'Intervall', 'caption' => 'Intervall (Minuten, 0 = kein Timer)', 'minimum' => 0, 'maximum' => 1440],
                 ['type' => 'NumberSpinner', 'name' => 'Vorschau', 'caption' => 'Vorschau (Tage)', 'minimum' => 1, 'maximum' => 28],
+                ['type' => 'CheckBox', 'name' => 'Katalog', 'caption' => 'Fehlende Staffel/Folge im Episoden-Cache nachschlagen (TVDB-Ablage, kein Netzzugriff)'],
                 ['type' => 'Label', 'caption' => '— Quelldateien —'],
                 ['type' => 'ValidationTextBox', 'name' => 'Datenpfad', 'caption' => 'Verzeichnis'],
                 ['type' => 'ValidationTextBox', 'name' => 'XmltvDatei', 'caption' => 'XMLTV'],
@@ -205,6 +220,11 @@ class SeriesRecorder extends IPSModule
                     ['type' => 'Button', 'caption' => 'Zuordnen', 'onClick' => 'echo SR_KanalProbe($id, $ProbeSender);'],
                 ]],
                 ['type' => 'RowLayout', 'items' => [
+                    ['type' => 'ValidationTextBox', 'name' => 'KatSerie', 'caption' => 'Serie'],
+                    ['type' => 'ValidationTextBox', 'name' => 'KatTitel', 'caption' => 'Episodentitel'],
+                    ['type' => 'Button', 'caption' => 'Im Katalog nachschlagen', 'onClick' => 'echo SR_KatalogProbe($id, $KatSerie, $KatTitel);'],
+                ]],
+                ['type' => 'RowLayout', 'items' => [
                     ['type' => 'ValidationTextBox', 'name' => 'ProbeSerie', 'caption' => 'Serie'],
                     ['type' => 'NumberSpinner', 'name' => 'ProbeStaffel', 'caption' => 'Staffel'],
                     ['type' => 'NumberSpinner', 'name' => 'ProbeFolge', 'caption' => 'Folge'],
@@ -226,7 +246,8 @@ class SeriesRecorder extends IPSModule
     {
         $tt = $this->titeltabelle();
         return new Analyse($this->favoriten(), $tt['aliase'], $tt['ablage'], $this->empfangbar(),
-            $this->kanaltabelle(), new Bestand($this->pfad('BestandDatei')), $this->bedingungen());
+            $this->kanaltabelle(), new Bestand($this->pfad('BestandDatei')), $this->bedingungen(),
+            $this->ReadPropertyBoolean('Katalog') ? new Episodenkatalog($this->ReadPropertyString('Datenpfad')) : null);
     }
 
     private function pfad(string $property): string
