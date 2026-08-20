@@ -140,3 +140,29 @@ Die uebrigen 24 Etikett-Abweichungen sind ein Sortier-Unterschied: bei zwei
 Ausstrahlungen derselben Folge nennt das Altsystem die in SEINER
 Verarbeitungsreihenfolge erste "vorhanden", das Modul die zeitlich fruehere.
 Beide Etiketten bedeuten "nicht aufnehmen".
+
+## Woher Staffel und Folge kommen
+
+Eine Kette, billigste Quelle zuerst:
+
+    1. Episodenkatalog   Dateiablage, 193 Serien / 16.565 Episoden   kostenlos
+    2. TheTVDB           nur wenn freigegeben                        500 ms je Anfrage
+
+Der TVDB-Handler der Skript-Fassung ist unveraendert uebernommen
+(`libs/fremd/`, siehe HERKUNFT.md) - er ruft keine IPS-Funktion auf und braucht
+von seiner Umgebung nur eine `log()`-Methode.
+
+**Der Netzzugriff ist ein hartes Gate, kein Schalter im Inneren.** Ohne
+Freigabe wird die TVDB-Quelle gar nicht erst gebaut. Der naheliegende Weg -
+die Klasse im "Nur-Cache-Modus" zu betreiben - waere eine Falle: ihr Einstieg
+`enrichBroadcastFromCache()` traegt zwar den Namen, ruft aber `searchSeries()`,
+und das geht bei unbekannter Serie ueber `apiRequest('/search/series')` doch
+ins Netz.
+
+Antworten werden je Lauf gemerkt: eine Serie, die zwanzigmal in der Woche
+laeuft, kostet eine Abfrage statt zwanzig. Dazu ein Deckel je Lauf, denn die
+Klasse wartet 500 ms zwischen zwei Anfragen und bis zu 30 s auf Antwort.
+
+TMDB ist bewusst draussen. Im Altsystem ist es der Ausweichweg hinter TVDB;
+sein Cache umfasst 61 Eintraege gegenueber 419. Es kommt erst dazu, wenn sich
+zeigt, dass TVDB allein Luecken laesst.

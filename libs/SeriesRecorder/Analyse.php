@@ -31,7 +31,7 @@ final class Analyse
         private array $kanalTabelle,
         private ?Bestand $bestand = null,
         private ?Bedingungen $bedingungen = null,
-        private ?Episodenkatalog $katalog = null,
+        private ?EpisodenQuelle $katalog = null,
     ) {
     }
 
@@ -121,6 +121,7 @@ final class Analyse
             'sendungen'    => $treffer,
             'kennzahlen'   => $z + ['Serien mit Ausstrahlung' => count(array_unique(array_column($treffer, 'serie')))],
             'offeneSender' => $offen,
+            'quellen'      => $this->katalog?->bericht() ?? '',
             'dauerMs'      => (int) round((microtime(true) - $t0) * 1000),
         ];
     }

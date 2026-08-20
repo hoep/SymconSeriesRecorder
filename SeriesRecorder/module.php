@@ -8,6 +8,8 @@ use Hoep\SeriesRecorder\Analyse;
 use Hoep\SeriesRecorder\Bedingungen;
 use Hoep\SeriesRecorder\Bestand;
 use Hoep\SeriesRecorder\Episodenkatalog;
+use Hoep\SeriesRecorder\Quellenkette;
+use Hoep\SeriesRecorder\TvdbQuelle;
 use Hoep\SeriesRecorder\KanalMapper;
 use Hoep\SeriesRecorder\TitelResolver;
 use Hoep\SeriesRecorder\XmltvLeser;
@@ -41,6 +43,12 @@ class SeriesRecorder extends IPSModule
         $this->RegisterPropertyString('BestandDatei', 'recordings.txt');
         $this->RegisterPropertyInteger('Vorschau', 14);           // Tage nach vorn
         $this->RegisterPropertyBoolean('Katalog', true);          // Episodennummern aus dem TVDB-Cache
+        // TheTVDB als Rueckfallebene HINTER dem Cache. Standard aus: solange das
+        // Modul nur mitliest, soll ein Lauf nichts nach draussen tun.
+        $this->RegisterPropertyBoolean('TvdbNetz', false);
+        $this->RegisterPropertyString('TvdbApiKey', '');
+        $this->RegisterPropertyInteger('TvdbDeckel', 25);         // Abfragen je Lauf
+        $this->RegisterPropertyInteger('TvdbCacheStunden', 168);
 
         // Regeln als Daten, nicht als Code. In der Skript-Fassung standen sie als
         // PHP-Literale mitten im Ablauf - deshalb hat auch nie jemand bemerkt, dass
@@ -65,6 +73,7 @@ class SeriesRecorder extends IPSModule
         $this->RegisterVariableInteger('Ausgeschlossen', 'Durch Schranke verworfen', '', 56);
         $this->RegisterVariableString('Ausstrahlungen', 'Ausstrahlungen (JSON)', '', 60);
         $this->RegisterVariableString('OffeneSender', 'Sender ohne Empfangskanal', '', 70);
+        $this->RegisterVariableString('Quellen', 'Episodenquellen', '', 80);
 
         $min = $this->ReadPropertyBoolean('Aktiv') ? max(0, $this->ReadPropertyInteger('Intervall')) : 0;
         $this->SetTimerInterval(self::TIMER_LAUF, $min * 60 * 1000);
@@ -106,6 +115,7 @@ class SeriesRecorder extends IPSModule
         $this->SetValue('LetzterLauf', time());
         $this->SetValue('Ausstrahlungen', json_encode(Analyse::alsTabelle($e['sendungen']), JSON_UNESCAPED_UNICODE));
         $this->SetValue('OffeneSender', implode("\n", $e['offeneSender']));
+        $this->SetValue('Quellen', (string) ($e['quellen'] ?? ''));
         $this->SetValue('Status', sprintf('%d Ausstrahlungen, davon %d fehlend; %d Serien, %d ms%s',
             $e['kennzahlen']['zugeordnet'] ?? 0,
             $e['kennzahlen']['aufnehmen'] ?? 0,
@@ -167,7 +177,14 @@ class SeriesRecorder extends IPSModule
                 ['type' => 'CheckBox', 'name' => 'Armed', 'caption' => 'Scharf (schaltet Timer am Receiver - in diesem Stand ohne Wirkung)'],
                 ['type' => 'NumberSpinner', 'name' => 'Intervall', 'caption' => 'Intervall (Minuten, 0 = kein Timer)', 'minimum' => 0, 'maximum' => 1440],
                 ['type' => 'NumberSpinner', 'name' => 'Vorschau', 'caption' => 'Vorschau (Tage)', 'minimum' => 1, 'maximum' => 28],
-                ['type' => 'CheckBox', 'name' => 'Katalog', 'caption' => 'Fehlende Staffel/Folge im Episoden-Cache nachschlagen (TVDB-Ablage, kein Netzzugriff)'],
+                ['type' => 'CheckBox', 'name' => 'Katalog', 'caption' => 'Fehlende Staffel/Folge im Episoden-Cache nachschlagen (kein Netzzugriff)'],
+                ['type' => 'ExpansionPanel', 'caption' => 'TheTVDB befragen, wenn der Cache nichts weiss', 'items' => [
+                    ['type' => 'Label', 'caption' => 'Nur fuer Serien, die noch nicht in der Ablage stehen. Der Abruf wartet 500 ms zwischen zwei Anfragen und bis zu 30 s auf Antwort - deshalb der Deckel je Lauf.'],
+                    ['type' => 'CheckBox', 'name' => 'TvdbNetz', 'caption' => 'Netzzugriff erlauben'],
+                    ['type' => 'PasswordTextBox', 'name' => 'TvdbApiKey', 'caption' => 'API-Schluessel'],
+                    ['type' => 'NumberSpinner', 'name' => 'TvdbDeckel', 'caption' => 'Hoechstens Abfragen je Lauf', 'minimum' => 1, 'maximum' => 500],
+                    ['type' => 'NumberSpinner', 'name' => 'TvdbCacheStunden', 'caption' => 'Antworten gelten (Stunden)', 'minimum' => 1, 'maximum' => 8760],
+                ]],
                 ['type' => 'Label', 'caption' => '— Quelldateien —'],
                 ['type' => 'ValidationTextBox', 'name' => 'Datenpfad', 'caption' => 'Verzeichnis'],
                 ['type' => 'ValidationTextBox', 'name' => 'XmltvDatei', 'caption' => 'XMLTV'],
@@ -247,7 +264,7 @@ class SeriesRecorder extends IPSModule
         $tt = $this->titeltabelle();
         return new Analyse($this->favoriten(), $tt['aliase'], $tt['ablage'], $this->empfangbar(),
             $this->kanaltabelle(), new Bestand($this->pfad('BestandDatei')), $this->bedingungen(),
-            $this->ReadPropertyBoolean('Katalog') ? new Episodenkatalog($this->ReadPropertyString('Datenpfad')) : null);
+            $this->episodenquelle());
     }
 
     private function pfad(string $property): string
@@ -310,6 +327,33 @@ class SeriesRecorder extends IPSModule
             }
         }
         return $out;
+    }
+
+    /**
+     * Die Kette: erst der Dateikatalog, dann - wenn freigegeben - TheTVDB.
+     * Ohne Freigabe wird die Netzquelle GAR NICHT GEBAUT. Das ist Absicht: die
+     * uebernommene Klasse geht auch ueber ihren "Cache"-Einstieg ins Netz, sobald
+     * eine Serie dort unbekannt ist. Die Zusicherung darf nicht an einem
+     * Methodennamen haengen.
+     */
+    private function episodenquelle(): ?\Hoep\SeriesRecorder\EpisodenQuelle
+    {
+        $quellen = [];
+        if ($this->ReadPropertyBoolean('Katalog')) {
+            $quellen[] = new Episodenkatalog($this->ReadPropertyString('Datenpfad'));
+        }
+        if ($this->ReadPropertyBoolean('TvdbNetz') && $this->ReadPropertyString('TvdbApiKey') !== '') {
+            $quellen[] = new TvdbQuelle(
+                rtrim($this->ReadPropertyString('Datenpfad'), '/') . '/tvdb',
+                $this->ReadPropertyString('TvdbApiKey'),
+                max(1, $this->ReadPropertyInteger('TvdbDeckel')),
+                max(1, $this->ReadPropertyInteger('TvdbCacheStunden'))
+            );
+        }
+        if ($quellen === []) {
+            return null;
+        }
+        return count($quellen) === 1 ? $quellen[0] : new Quellenkette(...$quellen);
     }
 
     private function bedingungen(): Bedingungen
