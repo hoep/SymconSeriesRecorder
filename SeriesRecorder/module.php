@@ -456,6 +456,15 @@ class SeriesRecorder extends IPSModule
             }
             $index  = $wo[$pfad];
             $bleibt = (string) $liste[$index][8];
+            // Zeigen beide Spalten auf DIESELBE Datei, ist die Zeile kaputt und
+            // nicht etwa ein Duplikat - ein Klick loeschte hier die einzige Kopie.
+            // So sah die Liste aus, nachdem eine entzaehlerte Aufnahme eine
+            // veraltete Bestandszeile hinterlassen hatte.
+            if ($pfad === $bleibt
+                || (($a = realpath($pfad)) !== false && $a === realpath($bleibt))) {
+                $abgelehnt[] = basename($pfad) . ': waere dieselbe Datei, die behalten werden soll';
+                continue;
+            }
             // Die zu behaltende Kopie muss da sein. Fehlt sie - etwa weil die
             // Freigabe abgerissen ist -, waere dies die letzte Aufnahme der Folge.
             if ($bleibt === '' || !is_file($bleibt)) {
@@ -575,9 +584,25 @@ class SeriesRecorder extends IPSModule
             }
             $p = trim((string) substr($u, (int) strrpos($u, '|') + 1));
             if ($p === $alt) {
-                // Auch der Dateiname in der vorletzten Spalte traegt den Zaehler.
-                $u = str_replace([basename($alt), $alt], [basename($neu), $neu], $u);
+                // Spaltenweise umschreiben statt per Textersetzung: der Titel in
+                // der vorletzten Spalte ist NICHT der Dateiname, sondern nur
+                // dessen hinterer Teil ("CSI Unplugged_001"). Eine Ersetzung des
+                // Basisnamens ging daran vorbei und liess den Zaehler im Titel
+                // stehen - die Zeile log dann ueber die Datei, auf die sie zeigt.
+                $f = explode('|', rtrim($u, "\r\n"));
+                if (count($f) >= 2) {
+                    $f[count($f) - 1] = $neu;
+                    $f[count($f) - 2] = (string) preg_replace('/_\d{3}$/', '', $f[count($f) - 2]);
+                    $u = implode('|', $f) . "\n";
+                }
                 fwrite($out, rtrim($u, "\r\n") . "\n");
+                continue;
+            }
+            if ($p === $neu) {
+                // Eine Zeile, die schon auf den Zielnamen zeigt, gehoert zu der
+                // Aufnahme, die eben geloescht wurde. Bliebe sie stehen, saehen
+                // zwei Zeilen auf dieselbe Datei - und die naechste Pruefung
+                // hielte das fuer ein Duplikat.
                 continue;
             }
             fwrite($out, $z);

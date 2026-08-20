@@ -97,6 +97,19 @@ final class Duplikate
             if (count($liste) < 2) {
                 continue;
             }
+            // Derselbe Pfad zweimal ist KEIN Duplikat, sondern eine kaputte
+            // Bestandszeile - und der gefaehrlichste Fall ueberhaupt: die Gruppe
+            // saehe aus wie zwei Aufnahmen, "behalten" und "loeschen" zeigten auf
+            // dieselbe Datei, und ein Klick loeschte die einzige Kopie. Genau das
+            // stand nach dem Entzaehlern in der Liste.
+            $einmalig = [];
+            foreach ($liste as $x) {
+                $einmalig[$x['pfad']] = $x;
+            }
+            $liste = array_values($einmalig);
+            if (count($liste) < 2) {
+                continue;
+            }
             // Eine Gruppe zaehlt nur, wenn ALLE ihre Dateien wirklich da sind.
             // Haengt die Netzwerkfreigabe nicht, liest die Bestandsliste sich
             // unveraendert weiter, waehrend filesize() ueberall 0 liefert - dann
