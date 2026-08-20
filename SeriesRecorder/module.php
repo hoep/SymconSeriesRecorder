@@ -249,12 +249,49 @@ class SeriesRecorder extends IPSModule
      */
     public function PruefeDuplikate(): string
     {
+        // Rechnen und anzeigen ist der Normalfall - Loeschen die Ausnahme.
+        $e = $this->aktualisiereDuplikatliste();
+        $d = new Duplikate($this->bestandsdatei());
+
+        $scharf = $this->ReadPropertyBoolean('Armed');
+        $ergebnis = null;
+        if ($scharf && $e['ueberfluessig'] > 0) {
+            $weg = [];
+            foreach ($e['gruppen'] as $g) {
+                foreach ($g['loeschen'] as $w) {
+                    $weg[] = $w;
+                }
+            }
+            $ergebnis = $d->loesche($weg);
+            foreach ($weg as $x) {
+                $this->entferneAusBestand((string) $x['pfad']);
+            }
+            // Bestand gepflegt und Liste neu gerechnet: die geloeschten Zeilen
+            // sind damit sofort weg, nicht erst nach dem naechsten Scan.
+            $this->aktualisiereDuplikatliste();
+        }
+
+        $this->SetValue('Duplikate', sprintf('%s · %d Gruppen, %d ueberfluessig (%s)%s',
+            date('d.m. H:i'), $e['gruppen_anzahl'], $e['ueberfluessig'], Duplikate::mb($e['bytes']),
+            $ergebnis === null
+                ? ' · nur Vorschlag'
+                : sprintf(' · %d geloescht, %d nicht gefunden', $ergebnis['geloescht'], $ergebnis['fehlend'])));
+
+        return json_encode(['ok' => true] + $e + ['geloescht' => $ergebnis], JSON_UNESCAPED_UNICODE);
+    }
+
+    /**
+     * Rechnet die Duplikatliste und schreibt sie in die Anzeigevariable.
+     * Loescht NICHTS - genau deshalb darf sie auch nach einer Einzelloeschung
+     * gerufen werden, ohne dass ein scharf geschaltetes Modul gleich alles
+     * andere mitnimmt.
+     *
+     * @return array<string,mixed> Ergebnis von Duplikate::finde()
+     */
+    private function aktualisiereDuplikatliste(): array
+    {
         $d = new Duplikate($this->bestandsdatei());
         $e = $d->finde();
-
-        // _Pfad ist fuer die Anzeige gedacht, nicht fuer den Menschen: die
-        // Tabelle im LiveViewBuilder blendet sie aus und gibt sie dem Loeschknopf
-        // mit. Ohne sie muesste das Widget den Pfad aus dem Dateinamen raten.
         $zeilen = [['Serie', 'Folge', 'Titel', 'Behalten', 'Groesse', 'Loeschen', 'Frei', '_Pfad']];
         foreach ($e['gruppen'] as $g) {
             foreach ($g['loeschen'] as $w) {
@@ -269,28 +306,50 @@ class SeriesRecorder extends IPSModule
             }
         }
         $this->SetValue('DuplikateListe', json_encode($zeilen, JSON_UNESCAPED_UNICODE));
+        return $e;
+    }
 
-        $scharf = $this->ReadPropertyBoolean('Armed');
-        $ergebnis = null;
-        if ($scharf && $e['ueberfluessig'] > 0) {
-            $weg = [];
-            foreach ($e['gruppen'] as $g) {
-                foreach ($g['loeschen'] as $w) {
-                    $weg[] = $w;
-                }
-            }
-            $ergebnis = $d->loesche($weg);
-            // Nach dem Loeschen ist die Bestandsliste veraltet - der naechste
-            // Scan zieht sie nach, aber der Hinweis gehoert in die Meldung.
+    /**
+     * Streicht eine Aufnahme aus der eigenen Bestandsliste.
+     *
+     * Ohne das haengt die geloeschte Datei bis zum naechsten Scan ueberall
+     * nach: in der Duplikatliste als Vorschlag, in der Zuordnung als
+     * 'vorhanden'. Der Scan laeuft stuendlich - so lange soll niemand eine
+     * Aufnahme angeboten bekommen, die es nicht mehr gibt.
+     */
+    private function entferneAusBestand(string $pfad): bool
+    {
+        $datei = $this->bestandsdatei();
+        $fh = @fopen($datei, 'r');
+        if ($fh === false) {
+            return false;
         }
-
-        $this->SetValue('Duplikate', sprintf('%s · %d Gruppen, %d ueberfluessig (%s)%s',
-            date('d.m. H:i'), $e['gruppen_anzahl'], $e['ueberfluessig'], Duplikate::mb($e['bytes']),
-            $ergebnis === null
-                ? ' · nur Vorschlag'
-                : sprintf(' · %d geloescht, %d nicht gefunden', $ergebnis['geloescht'], $ergebnis['fehlend'])));
-
-        return json_encode(['ok' => true] + $e + ['geloescht' => $ergebnis], JSON_UNESCAPED_UNICODE);
+        $temp = $datei . '.teil';
+        $out = @fopen($temp, 'w');
+        if ($out === false) {
+            fclose($fh);
+            return false;
+        }
+        $weg = false;
+        while (($z = fgets($fh)) !== false) {
+            $roh = $z;
+            if (!mb_check_encoding($z, 'UTF-8')) {
+                $z = mb_convert_encoding($z, 'UTF-8', 'ISO-8859-1');
+            }
+            $p = trim((string) substr($z, (int) strrpos($z, '|') + 1));
+            if ($p === $pfad) {
+                $weg = true;
+                continue;
+            }
+            fwrite($out, $roh);
+        }
+        fclose($fh);
+        fclose($out);
+        if (!$weg) {
+            @unlink($temp);
+            return false;
+        }
+        return @rename($temp, $datei);
     }
 
     /**
@@ -335,6 +394,12 @@ class SeriesRecorder extends IPSModule
 
         $r = $d->loesche([$treffer['weg']]);
         $ok = $r['geloescht'] === 1;
+        if ($ok) {
+            // Erst aus dem Bestand streichen, dann die Liste neu rechnen: sonst
+            // stuende die Zeile bis zum naechsten Scan weiter im Vorschlag.
+            $this->entferneAusBestand($Pfad);
+            $this->aktualisiereDuplikatliste();
+        }
         $this->SetValue('Duplikate', sprintf('%s · %s: %s (%s)%s',
             date('d.m. H:i'), $ok ? 'geloescht' : 'FEHLER', basename($Pfad),
             Duplikate::mb((int) $treffer['weg']['groesse']),
