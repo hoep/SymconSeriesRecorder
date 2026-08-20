@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Hoep\SeriesRecorder;
 
 require_once __DIR__ . '/Bestand.php';
+require_once __DIR__ . '/Dateisatz.php';
 
 /**
  * Findet mehrfach vorhandene Aufnahmen derselben Folge.
@@ -78,7 +79,9 @@ final class Duplikate
             }
             $nach[$s . '|' . $nummer][] = [
                 'serie' => $serie, 'nummer' => $nummer, 'titel' => $titel,
-                'pfad' => $pfad, 'groesse' => (int) @filesize($pfad), 'zeit' => (int) @filemtime($pfad),
+                // Groesse des ganzen Satzes, nicht nur des Videos: sie ist es, die
+                // beim Loeschen frei wird, und sie entscheidet, welche Aufnahme bleibt.
+                'pfad' => $pfad, 'groesse' => Dateisatz::groesse($pfad), 'zeit' => (int) @filemtime($pfad),
             ];
         }
         fclose($fh);
@@ -156,13 +159,14 @@ final class Duplikate
      * Unterstrich falsche Pfade enthaelt.
      *
      * @param list<array{pfad:string,groesse:int}> $dateien
-     * @return array{geloescht:int,fehlend:int,fehler:list<string>,bytes:int}
+     * @return array{geloescht:int,fehlend:int,fehler:list<string>,bytes:int,begleiter:int}
      */
     public function loesche(array $dateien): array
     {
         $geloescht = 0;
         $fehlend = 0;
         $bytes = 0;
+        $begleiter = 0;
         $fehler = [];
         foreach ($dateien as $d) {
             $p = (string) ($d['pfad'] ?? '');
@@ -174,14 +178,27 @@ final class Duplikate
                 $fehler[] = 'nicht mehr da: ' . $p;
                 continue;
             }
-            $gr = (int) @filesize($p);
-            if (@unlink($p)) {
+            // Nicht nur das Video: .eit, .nfo, .jpg, -thumb.jpg, .ts.ap, .ts.cuts,
+            // .ts.meta und .ts.sc gehoeren dazu. Wer sie stehen laesst, sammelt mit
+            // jeder Loeschung sieben verwaiste Dateien an.
+            $satz = Dateisatz::geschwister($p);
+            $gr = 0;
+            $weg = 0;
+            foreach ($satz as $einzeln) {
+                $gr += (int) @filesize($einzeln);
+                if (@unlink($einzeln)) {
+                    $weg++;
+                } else {
+                    $fehler[] = 'nicht loeschbar: ' . $einzeln;
+                }
+            }
+            if ($weg > 0) {
                 $geloescht++;
                 $bytes += $gr;
-            } else {
-                $fehler[] = 'nicht loeschbar: ' . $p;
+                $begleiter += max(0, $weg - 1);
             }
         }
-        return ['geloescht' => $geloescht, 'fehlend' => $fehlend, 'fehler' => $fehler, 'bytes' => $bytes];
+        return ['geloescht' => $geloescht, 'fehlend' => $fehlend, 'fehler' => $fehler,
+                'bytes' => $bytes, 'begleiter' => $begleiter];
     }
 }
