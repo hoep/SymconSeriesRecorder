@@ -380,12 +380,48 @@ class SeriesRecorder extends IPSModule
      * Das Scharf-Gate gilt hier bewusst NICHT: dies ist kein Automatismus,
      * sondern ein einzelner, ausdruecklicher Klick auf eine benannte Datei.
      */
+    /**
+     * Eine einzelne doppelte Aufnahme loeschen (Knopf in der Zeile).
+     *
+     * Nur eine Huelle um die Sammelfassung: es gibt genau EINEN Weg, auf dem
+     * geloescht wird, und damit genau eine Stelle, an der die Liste geschrieben
+     * wird. Sie nimmt auch ein JSON-Array entgegen und bleibt damit gueltig,
+     * solange eine Gegenstelle den alten Namen kennt - eine neue Prefix-Funktion
+     * steht erst nach einem Neustart des Dienstes zur Verfuegung.
+     */
     public function LoescheDatei(string $Pfad): string
     {
-        $Pfad = trim($Pfad);
-        if ($Pfad === '') {
+        return $this->LoescheDateien($Pfad);
+    }
+
+    /**
+     * Mehrere doppelte Aufnahmen in EINEM Aufruf loeschen.
+     *
+     * Der Sammelaufruf ist kein Tempo-Kniff, sondern eine Notwendigkeit. Feuert
+     * die Oberflaeche je Haekchen eine eigene Anfrage ab, laufen die Aufrufe
+     * nebenlaeufig: jeder liest dieselbe Liste, streicht SEINE Zeile und schreibt
+     * die Liste zurueck. Der letzte Schreiber gewinnt, und die uebrigen
+     * Streichungen sind verloren - die Dateien sind weg, die Zeilen stehen noch
+     * da. Genau so sah es aus, als "die Tabelle sich nicht aktualisiert".
+     *
+     * Hier wird die Liste einmal gelesen, alles geprueft und geloescht, und am
+     * Ende einmal geschrieben.
+     *
+     * @param string $Pfade JSON-Array der zu loeschenden Pfade
+     */
+    public function LoescheDateien(string $Pfade): string
+    {
+        $pfade = json_decode($Pfade, true);
+        if (!is_array($pfade)) {
+            $pfade = [trim($Pfade)];
+        }
+        $pfade = array_values(array_unique(array_filter(array_map(
+            static fn($p): string => trim((string) $p), $pfade
+        ), static fn(string $p): bool => $p !== '')));
+        if ($pfade === []) {
             return json_encode(['ok' => false, 'grund' => 'kein Pfad']);
         }
+
         // Die Liste liegt vor - sie noch einmal komplett durchzurechnen kostete
         // acht Sekunden ueber die Netzwerkfreigabe, und in der Zeit sieht der
         // Anwender nichts passieren. Gebraucht wird ohnehin nur zweierlei: steht
@@ -396,66 +432,97 @@ class SeriesRecorder extends IPSModule
             return json_encode(['ok' => false, 'grund' => 'keine Liste vorhanden - bitte einmal pruefen lassen'],
                 JSON_UNESCAPED_UNICODE);
         }
-
-        $treffer = null;
-        $index = 0;
+        // Pfad -> Zeilennummer, einmal aufgebaut statt je Datei durchsucht.
+        $wo = [];
         foreach ($liste as $n => $z) {
-            if ($n === 0 || !is_array($z) || count($z) < 9) {
+            if ($n > 0 && is_array($z) && count($z) >= 9) {
+                $wo[(string) $z[7]] = $n;
+            }
+        }
+
+        $d = new Duplikate($this->bestandsdatei());
+        $streichen = [];   // Zeilennummern
+        $bleiber   = [];   // zu pruefende Restaufnahmen, ohne Dopplung
+        $abgelehnt = [];
+        $geloescht = 0;
+        $begleiter = 0;
+        $bytes     = 0;
+        $letzter   = '';
+
+        foreach ($pfade as $pfad) {
+            if (!isset($wo[$pfad])) {
+                $abgelehnt[] = basename($pfad) . ': steht nicht als ueberfluessig in der Liste';
                 continue;
             }
-            if ((string) $z[7] === $Pfad) {
-                $treffer = $z;
-                $index = $n;
-                break;
+            $index  = $wo[$pfad];
+            $bleibt = (string) $liste[$index][8];
+            // Die zu behaltende Kopie muss da sein. Fehlt sie - etwa weil die
+            // Freigabe abgerissen ist -, waere dies die letzte Aufnahme der Folge.
+            if ($bleibt === '' || !is_file($bleibt)) {
+                $abgelehnt[] = basename($pfad) . ': die zu behaltende Kopie fehlt';
+                continue;
+            }
+            if (!is_file($pfad)) {
+                // Schon weg: Zeile trotzdem streichen, damit sie nicht stehen bleibt.
+                $streichen[$index] = $pfad;
+                $bleiber[$bleibt]  = true;
+                continue;
+            }
+            // Der ganze Satz geht: Video plus .eit, .nfo, .jpg, -thumb.jpg und die
+            // vier .ts.*-Begleiter. Sonst bleiben je Loeschung sieben Waisen liegen.
+            $r = $d->loesche([['pfad' => $pfad, 'groesse' => 0]]);
+            if ($r['geloescht'] !== 1) {
+                $abgelehnt[] = basename($pfad) . ': liess sich nicht loeschen';
+                continue;
+            }
+            $geloescht++;
+            $begleiter += (int) $r['begleiter'];
+            $bytes     += (int) $r['bytes'];
+            $letzter    = $pfad;
+            $streichen[$index] = $pfad;
+            $bleiber[$bleibt]  = true;
+        }
+
+        // Erst jetzt entzaehlern: bei drei Kopien derselben Folge fallen zwei
+        // Zeilen an, und solange die zweite noch liegt, waere der Name ohne
+        // Zaehler gar nicht frei.
+        $umbenannt = [];
+        foreach (array_keys($bleiber) as $bleibt) {
+            $neu = $this->entzaehlere($bleibt);
+            if ($neu !== null) {
+                $umbenannt[$bleibt] = $neu;
             }
         }
-        if ($treffer === null) {
-            $this->SetValue('Duplikate', date('d.m. H:i') . ' · abgelehnt: steht nicht in der Liste');
-            return json_encode(['ok' => false, 'grund' => 'Diese Datei steht nicht als ueberfluessig in der Liste.'],
-                JSON_UNESCAPED_UNICODE);
-        }
-        $bleibt = (string) $treffer[8];
-        if ($bleibt === '' || !is_file($bleibt)) {
-            $this->SetValue('Duplikate', date('d.m. H:i') . ' · abgelehnt: die zu behaltende Kopie fehlt');
-            return json_encode([
-                'ok' => false,
-                'grund' => 'Die Kopie, die bleiben soll, ist nicht auffindbar - dann waere dies die letzte.',
-                'bleibt' => $bleibt,
-            ], JSON_UNESCAPED_UNICODE);
-        }
-        if (!is_file($Pfad)) {
-            // Schon weg: Zeile trotzdem aus der Liste nehmen, damit sie nicht stehen bleibt.
-            $this->streicheAusListe($index, $Pfad);
-            return json_encode(['ok' => true, 'grund' => 'war bereits geloescht', 'geloescht' => 0],
-                JSON_UNESCAPED_UNICODE);
+
+        // Ein einziger Schreibvorgang auf die Liste - siehe Kopf der Methode.
+        if ($streichen !== []) {
+            foreach (array_keys($streichen) as $index) {
+                unset($liste[$index]);
+            }
+            $this->SetValue('DuplikateListe', json_encode(array_values($liste), JSON_UNESCAPED_UNICODE));
+            foreach ($streichen as $pfad) {
+                $this->entferneAusBestand($pfad);
+            }
         }
 
-        // Der ganze Satz geht: Video plus .eit, .nfo, .jpg, -thumb.jpg und die
-        // vier .ts.*-Begleiter. Sonst bleiben je Loeschung sieben Waisen liegen.
-        $d = new Duplikate($this->bestandsdatei());
-        $r = $d->loesche([['pfad' => $Pfad, 'groesse' => 0]]);
-        if ($r['geloescht'] !== 1) {
-            $this->SetValue('Duplikate', date('d.m. H:i') . ' · FEHLER beim Loeschen: ' . basename($Pfad));
-            return json_encode(['ok' => false, 'grund' => 'Datei liess sich nicht loeschen',
-                                'fehler' => $r['fehler']], JSON_UNESCAPED_UNICODE);
-        }
-        $this->streicheAusListe($index, $Pfad);
-
-        // Jetzt traegt womoeglich die verbliebene Aufnahme noch den Zaehler des
-        // Receivers ("_001"), obwohl es keine zweite mehr gibt. Das ist genau der
-        // Moment, ihn loszuwerden - mitsamt allen Begleitern.
-        $umbenannt = $this->entzaehlere($bleibt);
-
-        $this->SetValue('Duplikate', sprintf('%s · geloescht: %s (%s, %d Begleitdateien)%s',
-            date('d.m. H:i'), basename($Pfad), Duplikate::mb((int) $r['bytes']), (int) $r['begleiter'],
-            $umbenannt === null ? (' · es bleibt ' . basename($bleibt))
-                                : (' · bleibt jetzt ' . basename($umbenannt))));
+        $meldung = $geloescht === 1 && $abgelehnt === []
+            ? sprintf('geloescht: %s (%s, %d Begleitdateien)%s', basename($letzter),
+                Duplikate::mb($bytes), $begleiter,
+                $umbenannt === [] ? '' : ' · bleibt jetzt ' . basename((string) reset($umbenannt)))
+            : sprintf('%d von %d geloescht (%s, %d Begleitdateien)%s%s',
+                $geloescht, count($pfade), Duplikate::mb($bytes), $begleiter,
+                $umbenannt === [] ? '' : ' · ' . count($umbenannt) . ' entzaehlert',
+                $abgelehnt === [] ? '' : ' · ' . count($abgelehnt) . ' abgelehnt');
+        $this->SetValue('Duplikate', date('d.m. H:i') . ' · ' . $meldung);
 
         return json_encode([
-            'ok' => true, 'geloescht' => 1, 'begleiter' => $r['begleiter'],
-            'freigeworden' => Duplikate::mb((int) $r['bytes']),
-            'bleibt' => basename($umbenannt ?? $bleibt),
-            'umbenannt' => $umbenannt !== null,
+            'ok'           => $geloescht > 0 || ($streichen !== [] && $abgelehnt === []),
+            'geloescht'    => $geloescht,
+            'begleiter'    => $begleiter,
+            'freigeworden' => Duplikate::mb($bytes),
+            'umbenannt'    => count($umbenannt),
+            'abgelehnt'    => $abgelehnt,
+            'grund'        => $abgelehnt === [] ? '' : implode(' | ', $abgelehnt),
         ], JSON_UNESCAPED_UNICODE);
     }
 
