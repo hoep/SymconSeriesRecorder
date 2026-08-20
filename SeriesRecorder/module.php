@@ -12,11 +12,13 @@ require_once __DIR__ . '/../libs/SeriesRecorder/XmltvBezug.php';
 require_once __DIR__ . '/../libs/SeriesRecorder/WunschlisteBezug.php';
 require_once __DIR__ . '/../libs/SeriesRecorder/Bestandsscan.php';
 require_once __DIR__ . '/../libs/SeriesRecorder/Receiver.php';
+require_once __DIR__ . '/../libs/SeriesRecorder/Duplikate.php';
 
 use Hoep\SeriesRecorder\Analyse;
 use Hoep\SeriesRecorder\Bedingungen;
 use Hoep\SeriesRecorder\Bestand;
 use Hoep\SeriesRecorder\Bestandsscan;
+use Hoep\SeriesRecorder\Duplikate;
 use Hoep\SeriesRecorder\Episodenkatalog;
 use Hoep\SeriesRecorder\Quellenkette;
 use Hoep\SeriesRecorder\Receiver;
@@ -49,6 +51,7 @@ class SeriesRecorder extends IPSModule
     private const TIMER_BEZUG  = 'Bezug';
     private const TIMER_WUNSCH = 'Wunschliste';
     private const TIMER_SCAN   = 'Bestandsscan';
+    private const TIMER_DUP    = 'Duplikate';
 
     public function Create(): void
     {
@@ -78,6 +81,17 @@ class SeriesRecorder extends IPSModule
         // Receiver: in diesem Stand NUR zum Lesen der Timerliste.
         $this->RegisterPropertyString('ReceiverIp', '');
         $this->RegisterPropertyString('ReceiverBouquet', '');
+        $this->RegisterPropertyInteger('ReceiverTuner', 18);
+        // Vor- und Nachlauf in Minuten. ACHTUNG bei der Uebernahme aus dem
+        // Altskript: dort ist die Zuordnung vertauscht - 'preRecord' bekommt den
+        // Wert der Nachlauf-Variablen und 'postRecord' den der Vorlauf-Variablen.
+        // Weil beide auf 2 stehen, faellt es dort nicht auf.
+        $this->RegisterPropertyInteger('Vorlauf', 2);
+        $this->RegisterPropertyInteger('Nachlauf', 2);
+        // Zielpfad AUF DEM RECEIVER (nicht der Einhaengepunkt hier).
+        $this->RegisterPropertyString('ReceiverAufnahmepfad', '/mnt/net/VUAufnahmen');
+        // Duplikate: Suchen ist harmlos, Loeschen haengt am Scharf-Gate.
+        $this->RegisterPropertyInteger('IntervallDuplikate', 0);
         $this->RegisterPropertyString('Datenpfad', '/var/lib/symcon/serienrecorder/');
         $this->RegisterPropertyString('XmltvDatei', 'xmltv.xml');
         $this->RegisterPropertyString('FavoritenDatei', 'favorites.xml');
@@ -109,6 +123,7 @@ class SeriesRecorder extends IPSModule
         $this->RegisterTimer(self::TIMER_BEZUG, 0, 'SR_HoleProgramm($_IPS[\'TARGET\']);');
         $this->RegisterTimer(self::TIMER_WUNSCH, 0, 'SR_HoleWunschliste($_IPS[\'TARGET\']);');
         $this->RegisterTimer(self::TIMER_SCAN, 0, 'SR_ScanneBestand($_IPS[\'TARGET\']);');
+        $this->RegisterTimer(self::TIMER_DUP, 0, 'SR_PruefeDuplikate($_IPS[\'TARGET\']);');
     }
 
     public function ApplyChanges(): void
@@ -129,6 +144,8 @@ class SeriesRecorder extends IPSModule
         $this->RegisterVariableString('Bezug', 'Programmvorschau geholt', '', 90);
         $this->RegisterVariableString('Wunschliste', 'Wunschliste geholt', '', 100);
         $this->RegisterVariableString('Bestand', 'Bestand aufgenommen', '', 110);
+        $this->RegisterVariableString('Duplikate', 'Duplikate geprueft', '', 120);
+        $this->RegisterVariableString('DuplikateListe', 'Duplikate (JSON)', '', 130);
 
         $an = $this->ReadPropertyBoolean('Aktiv');
         $this->SetTimerInterval(self::TIMER_LAUF,
@@ -139,6 +156,8 @@ class SeriesRecorder extends IPSModule
             ($an ? max(0, $this->ReadPropertyInteger('IntervallWunsch')) : 0) * 60 * 1000);
         $this->SetTimerInterval(self::TIMER_SCAN,
             ($an ? max(0, $this->ReadPropertyInteger('IntervallScan')) : 0) * 60 * 1000);
+        $this->SetTimerInterval(self::TIMER_DUP,
+            ($an ? max(0, $this->ReadPropertyInteger('IntervallDuplikate')) : 0) * 60 * 1000);
 
         $fehlt = $this->fehlendeDateien();
         if ($fehlt !== []) {
@@ -222,6 +241,53 @@ class SeriesRecorder extends IPSModule
     }
 
     /**
+     * Sucht mehrfach vorhandene Aufnahmen. Loescht NUR, wenn scharf geschaltet
+     * ist - sonst bleibt es beim Vorschlag in der Variablen.
+     *
+     * Die Trennung ist Absicht: eine Loeschliste laesst sich vorher lesen, und
+     * ein Fehlgriff kostet hier eine Aufnahme, die es nicht mehr gibt.
+     */
+    public function PruefeDuplikate(): string
+    {
+        $d = new Duplikate($this->bestandsdatei());
+        $e = $d->finde();
+
+        $zeilen = [['Serie', 'Folge', 'Titel', 'Behalten', 'Groesse', 'Loeschen', 'Frei']];
+        foreach ($e['gruppen'] as $g) {
+            foreach ($g['loeschen'] as $w) {
+                $zeilen[] = [
+                    (string) $g['serie'], strtoupper((string) $g['nummer']), (string) $g['titel'],
+                    basename((string) $g['behalten']['pfad']), Duplikate::mb((int) $g['behalten']['groesse']),
+                    basename((string) $w['pfad']), Duplikate::mb((int) $w['groesse']),
+                ];
+            }
+        }
+        $this->SetValue('DuplikateListe', json_encode($zeilen, JSON_UNESCAPED_UNICODE));
+
+        $scharf = $this->ReadPropertyBoolean('Armed');
+        $ergebnis = null;
+        if ($scharf && $e['ueberfluessig'] > 0) {
+            $weg = [];
+            foreach ($e['gruppen'] as $g) {
+                foreach ($g['loeschen'] as $w) {
+                    $weg[] = $w;
+                }
+            }
+            $ergebnis = $d->loesche($weg);
+            // Nach dem Loeschen ist die Bestandsliste veraltet - der naechste
+            // Scan zieht sie nach, aber der Hinweis gehoert in die Meldung.
+        }
+
+        $this->SetValue('Duplikate', sprintf('%s · %d Gruppen, %d ueberfluessig (%s)%s',
+            date('d.m. H:i'), $e['gruppen_anzahl'], $e['ueberfluessig'], Duplikate::mb($e['bytes']),
+            $ergebnis === null
+                ? ' · nur Vorschlag'
+                : sprintf(' · %d geloescht, %d nicht gefunden', $ergebnis['geloescht'], $ergebnis['fehlend'])));
+
+        return json_encode(['ok' => true] + $e + ['geloescht' => $ergebnis], JSON_UNESCAPED_UNICODE);
+    }
+
+    /**
      * Nimmt den Bestand auf der Platte auf. Rein lesend bis auf die eigene
      * Liste; loescht und benennt nichts um.
      */
@@ -301,12 +367,19 @@ class SeriesRecorder extends IPSModule
                 ['type' => 'ValidationTextBox', 'name' => 'XmltvZiel', 'caption' => 'Zieldatei (eigene, nicht die des Altsystems)'],
                 ['type' => 'NumberSpinner', 'name' => 'IntervallWunsch', 'caption' => 'Wunschliste holen (Minuten)', 'minimum' => 0, 'maximum' => 10080],
                 ['type' => 'NumberSpinner', 'name' => 'IntervallScan', 'caption' => 'Bestand scannen (Minuten)', 'minimum' => 0, 'maximum' => 10080],
+                ['type' => 'NumberSpinner', 'name' => 'IntervallDuplikate', 'caption' => 'Duplikate pruefen (Minuten)', 'minimum' => 0, 'maximum' => 10080],
                 ['type' => 'ValidationTextBox', 'name' => 'Aufnahmepfade', 'caption' => 'Aufnahmeverzeichnisse (mit Komma trennen)'],
                 ['type' => 'ValidationTextBox', 'name' => 'ScanZiel', 'caption' => 'Bestandsliste (eigene)'],
                 ['type' => 'NumberSpinner', 'name' => 'ScanMindestens', 'caption' => 'Weniger Funde = Scan gilt als fehlgeschlagen', 'minimum' => 1, 'maximum' => 100000],
                 ['type' => 'Label', 'caption' => '— Receiver: wird in diesem Stand NUR gelesen (programmierte Aufnahmen) —'],
                 ['type' => 'ValidationTextBox', 'name' => 'ReceiverIp', 'caption' => 'Adresse'],
                 ['type' => 'ValidationTextBox', 'name' => 'ReceiverBouquet', 'caption' => 'Bouquet (optional)'],
+                ['type' => 'NumberSpinner', 'name' => 'ReceiverTuner', 'caption' => 'Verfuegbare Tuner', 'minimum' => 1, 'maximum' => 64],
+                ['type' => 'ValidationTextBox', 'name' => 'ReceiverAufnahmepfad', 'caption' => 'Aufnahmepfad auf dem Receiver'],
+                ['type' => 'RowLayout', 'items' => [
+                    ['type' => 'NumberSpinner', 'name' => 'Vorlauf', 'caption' => 'Vorlauf (Minuten)', 'minimum' => 0, 'maximum' => 60],
+                    ['type' => 'NumberSpinner', 'name' => 'Nachlauf', 'caption' => 'Nachlauf (Minuten)', 'minimum' => 0, 'maximum' => 120],
+                ]],
                 ['type' => 'ExpansionPanel', 'caption' => 'Zugang zur Wunschliste', 'items' => [
                     ['type' => 'ValidationTextBox', 'name' => 'WunschBenutzer', 'caption' => 'Benutzer'],
                     ['type' => 'PasswordTextBox', 'name' => 'WunschPasswort', 'caption' => 'Passwort'],
@@ -375,6 +448,7 @@ class SeriesRecorder extends IPSModule
                 ['type' => 'Button', 'caption' => 'Programmvorschau jetzt holen', 'onClick' => 'echo SR_HoleProgramm($id);'],
                 ['type' => 'Button', 'caption' => 'Wunschliste jetzt holen', 'onClick' => 'echo SR_HoleWunschliste($id);'],
                 ['type' => 'Button', 'caption' => 'Bestand jetzt scannen', 'onClick' => 'echo SR_ScanneBestand($id);'],
+                ['type' => 'Button', 'caption' => 'Duplikate pruefen (loescht nur wenn scharf)', 'onClick' => 'echo SR_PruefeDuplikate($id);'],
                 ['type' => 'RowLayout', 'items' => [
                     ['type' => 'ValidationTextBox', 'name' => 'ProbeTitel', 'caption' => 'Titel pruefen'],
                     ['type' => 'Button', 'caption' => 'Zuordnen', 'onClick' => 'echo SR_TitelProbe($id, $ProbeTitel);'],
@@ -519,7 +593,9 @@ class SeriesRecorder extends IPSModule
     private function receiver(): ?Receiver
     {
         $ip = trim($this->ReadPropertyString('ReceiverIp'));
-        return $ip === '' ? null : new Receiver($ip, trim($this->ReadPropertyString('ReceiverBouquet')));
+        return $ip === '' ? null : new Receiver($ip,
+            trim($this->ReadPropertyString('ReceiverBouquet')),
+            max(1, $this->ReadPropertyInteger('ReceiverTuner')));
     }
 
     /** Die selbst aufgenommene Liste hat Vorrang, sonst die des Altsystems. */
