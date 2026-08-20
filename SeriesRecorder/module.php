@@ -252,13 +252,19 @@ class SeriesRecorder extends IPSModule
         $d = new Duplikate($this->bestandsdatei());
         $e = $d->finde();
 
-        $zeilen = [['Serie', 'Folge', 'Titel', 'Behalten', 'Groesse', 'Loeschen', 'Frei']];
+        // _Pfad ist fuer die Anzeige gedacht, nicht fuer den Menschen: die
+        // Tabelle im LiveViewBuilder blendet sie aus und gibt sie dem Loeschknopf
+        // mit. Ohne sie muesste das Widget den Pfad aus dem Dateinamen raten.
+        $zeilen = [['Serie', 'Folge', 'Titel', 'Behalten', 'Groesse', 'Loeschen', 'Frei', '_Pfad']];
         foreach ($e['gruppen'] as $g) {
             foreach ($g['loeschen'] as $w) {
                 $zeilen[] = [
                     (string) $g['serie'], strtoupper((string) $g['nummer']), (string) $g['titel'],
-                    basename((string) $g['behalten']['pfad']), Duplikate::mb((int) $g['behalten']['groesse']),
-                    basename((string) $w['pfad']), Duplikate::mb((int) $w['groesse']),
+                    self::kurzerName((string) $g['behalten']['pfad'], (string) $g['serie']),
+                    Duplikate::mb((int) $g['behalten']['groesse']),
+                    self::kurzerName((string) $w['pfad'], (string) $g['serie']),
+                    Duplikate::mb((int) $w['groesse']),
+                    (string) $w['pfad'],
                 ];
             }
         }
@@ -712,6 +718,26 @@ class SeriesRecorder extends IPSModule
         }
         fclose($fh);
         return $treffer;
+    }
+
+    /**
+     * Dateiname ohne den Teil, der links in der Zeile ohnehin steht.
+     *
+     * "Bones - S11E17 - Die Suende im Secret Service_001.ts" wird zu
+     * "Die Suende im Secret Service_001.ts". Serie und Folge fuehrt die Tabelle
+     * in eigenen Spalten; sie im Dateinamen zu wiederholen kostet die halbe
+     * Zeilenbreite und verdraengt den Knopf aus dem Bild.
+     */
+    private static function kurzerName(string $pfad, string $serie): string
+    {
+        $n = basename($pfad);
+        if (preg_match('/^(.*?) - S\d{1,4}E\d{1,4} - (.+)$/', $n, $m)) {
+            return $m[2];
+        }
+        if ($serie !== '' && str_starts_with($n, $serie . ' - ')) {
+            return substr($n, strlen($serie) + 3);
+        }
+        return $n;
     }
 
     /** Nur wenn eine Adresse eingetragen ist - sonst bleibt der Receiver aussen vor. */
