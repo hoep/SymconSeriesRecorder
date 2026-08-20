@@ -22,6 +22,9 @@ require_once __DIR__ . '/EpisodenQuelle.php';
  *   A  <Serie>.json            {"Series":…, "Episode":[{SeasonNumber, EpisodeNumber, EpisodeName}]}
  *   B  tvdb/series_<id>/episodes.json  [{airedSeason, airedEpisodeNumber, episodeName}]
  *      dazu tvdb/series_search_<hash>.json  {id, seriesName}  fuer die Zuordnung
+ *   C  tmdb/series_<id>/series_info.json  {name}
+ *      tmdb/series_<id>/season_<n>/episode_<m>.json  {episode_number, name}
+ *      Die Staffel steht NUR im Ordnernamen - in der Datei fehlt sie.
  *
  * Warum das wichtig ist: fuer Tatort liefert das EPG weder Staffel noch Folge.
  * Der Katalog kennt "Aus dem Dunkel" als S2023E26 - genau die Zaehlung, unter
@@ -36,7 +39,7 @@ final class Episodenkatalog implements EpisodenQuelle
     private int $serien = 0;
     private int $episoden = 0;
 
-    public function __construct(private string $verzeichnis)
+    public function __construct(private string $verzeichnis, private bool $mitTmdb = true)
     {
         $this->lade();
     }
@@ -134,6 +137,34 @@ final class Episodenkatalog implements EpisodenQuelle
                 }
                 $this->merke($name, (string) ($e['episodeName'] ?? ''),
                     (int) ($e['airedSeason'] ?? 0), (int) ($e['airedEpisodeNumber'] ?? 0));
+            }
+        }
+
+        // --- Format C: TMDB legt je Episode eine eigene Datei an. Das sind
+        // ueber 5000 Dateien; sie einzeln zu oeffnen kostet Zeit, deshalb wird
+        // dieser Teil nur gelesen, wenn er verlangt ist. Ohne ihn bliebe alles,
+        // was TMDB frisch holt, fuer den Katalog unsichtbar - beim naechsten
+        // Lauf muesste dieselbe Folge erneut ueber die Schnittstelle geholt
+        // werden, obwohl sie laengst auf der Platte liegt.
+        if ($this->mitTmdb) {
+            foreach (glob($v . '/tmdb/series_*/series_info.json') ?: [] as $datei) {
+                $info = self::json($datei);
+                $name = trim((string) ($info['name'] ?? ''));
+                if ($name === '') {
+                    continue;
+                }
+                $ordner = dirname($datei);
+                foreach (glob($ordner . '/season_*/episode_*.json') ?: [] as $ep) {
+                    if (!preg_match('#/season_(\d+)/episode_(\d+)\.json$#', $ep, $m)) {
+                        continue;
+                    }
+                    $e = self::json($ep);
+                    $titel = (string) ($e['name'] ?? '');
+                    // Die Folgennummer aus der Datei ist massgeblich, der Dateiname
+                    // nur der Notnagel: bei Doppelfolgen weichen sie voneinander ab.
+                    $nr = (int) ($e['episode_number'] ?? $m[2]);
+                    $this->merke($name, $titel, (int) $m[1], $nr);
+                }
             }
         }
 

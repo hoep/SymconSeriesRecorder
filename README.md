@@ -166,3 +166,21 @@ Klasse wartet 500 ms zwischen zwei Anfragen und bis zu 30 s auf Antwort.
 TMDB ist bewusst draussen. Im Altsystem ist es der Ausweichweg hinter TVDB;
 sein Cache umfasst 61 Eintraege gegenueber 419. Es kommt erst dazu, wenn sich
 zeigt, dass TVDB allein Luecken laesst.
+
+## Wer haelt den Katalog aktuell?
+
+Heute: **das Altsystem**. `Schedule Recordings` (44702) laeuft alle zwei
+Stunden und schreibt dabei die Serien-Dumps und den TVDB-Cache neu - am
+20.08.2026 zuletzt um 16:08.
+
+Das Modul liest diese Ablage und schreibt selbst nur ueber die gekapselten
+Handler: was TMDB oder TheTVDB frisch holen, legen sie in ihren eigenen
+Verzeichnissen ab. Damit der Katalog davon auch profitiert, liest er seit
+diesem Stand **drei** Formate statt zwei - das TMDB-Format legt je Episode eine
+eigene Datei an (ueber 5000 Stueck), was zusaetzliche 0,08 s kostet und 2200
+Episoden bringt.
+
+**Nach dem Cutover** (Phase 4, Altsystem aus) pflegen nur noch die Handler des
+Moduls. Die Serien-Dumps im Hauptverzeichnis und der TVDB-Cache frieren dann
+auf ihrem letzten Stand ein - was kein Verlust ist, solange TMDB die neuen
+Folgen liefert, aber vor dem Abschalten geprueft gehoert.
