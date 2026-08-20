@@ -8,6 +8,7 @@ require_once __DIR__ . '/../libs/SeriesRecorder/Analyse.php';
 // einschaltet. Genau so ist es passiert.
 require_once __DIR__ . '/../libs/SeriesRecorder/TmdbQuelle.php';
 require_once __DIR__ . '/../libs/SeriesRecorder/TvdbQuelle.php';
+require_once __DIR__ . '/../libs/SeriesRecorder/XmltvBezug.php';
 
 use Hoep\SeriesRecorder\Analyse;
 use Hoep\SeriesRecorder\Bedingungen;
@@ -18,6 +19,7 @@ use Hoep\SeriesRecorder\TmdbQuelle;
 use Hoep\SeriesRecorder\TvdbQuelle;
 use Hoep\SeriesRecorder\KanalMapper;
 use Hoep\SeriesRecorder\TitelResolver;
+use Hoep\SeriesRecorder\XmltvBezug;
 use Hoep\SeriesRecorder\XmltvLeser;
 
 /**
@@ -33,7 +35,12 @@ use Hoep\SeriesRecorder\XmltvLeser;
  */
 class SeriesRecorder extends IPSModule
 {
-    private const TIMER_LAUF = 'Lauf';
+    // Je Aufgabe ein eigener Timer statt eines gemeinsamen. Die Aufgaben haben
+    // verschiedene Kosten und verschiedene Halbwertszeiten: die Programmvorschau
+    // aendert sich zweimal am Tag, die Zuordnung soll oefter laufen. Ein
+    // gemeinsamer Takt muesste sich am teuersten Posten orientieren.
+    private const TIMER_LAUF   = 'Lauf';
+    private const TIMER_BEZUG  = 'Bezug';
 
     public function Create(): void
     {
@@ -42,6 +49,11 @@ class SeriesRecorder extends IPSModule
         $this->RegisterPropertyBoolean('Aktiv', true);
         $this->RegisterPropertyBoolean('Armed', false);
         $this->RegisterPropertyInteger('Intervall', 60);          // Minuten, 0 = kein Timer
+        $this->RegisterPropertyInteger('IntervallBezug', 0);      // Programmvorschau holen
+        $this->RegisterPropertyString('XmltvUrl', '');
+        // Eigene Zieldatei: solange das Altsystem laeuft, wuerden sich beide
+        // gegenseitig die Datei ueberschreiben.
+        $this->RegisterPropertyString('XmltvZiel', 'xmltv-sr.xml');
         $this->RegisterPropertyString('Datenpfad', '/var/lib/symcon/serienrecorder/');
         $this->RegisterPropertyString('XmltvDatei', 'xmltv.xml');
         $this->RegisterPropertyString('FavoritenDatei', 'favorites.xml');
@@ -70,6 +82,7 @@ class SeriesRecorder extends IPSModule
         $this->RegisterPropertyString('Bedingungen', '[]');       // Serie + Feld + Vergleich + Wert
 
         $this->RegisterTimer(self::TIMER_LAUF, 0, 'SR_Analyse($_IPS[\'TARGET\']);');
+        $this->RegisterTimer(self::TIMER_BEZUG, 0, 'SR_HoleProgramm($_IPS[\'TARGET\']);');
     }
 
     public function ApplyChanges(): void
@@ -86,9 +99,13 @@ class SeriesRecorder extends IPSModule
         $this->RegisterVariableString('Ausstrahlungen', 'Ausstrahlungen (JSON)', '', 60);
         $this->RegisterVariableString('OffeneSender', 'Sender ohne Empfangskanal', '', 70);
         $this->RegisterVariableString('Quellen', 'Episodenquellen', '', 80);
+        $this->RegisterVariableString('Bezug', 'Programmvorschau geholt', '', 90);
 
-        $min = $this->ReadPropertyBoolean('Aktiv') ? max(0, $this->ReadPropertyInteger('Intervall')) : 0;
-        $this->SetTimerInterval(self::TIMER_LAUF, $min * 60 * 1000);
+        $an = $this->ReadPropertyBoolean('Aktiv');
+        $this->SetTimerInterval(self::TIMER_LAUF,
+            ($an ? max(0, $this->ReadPropertyInteger('Intervall')) : 0) * 60 * 1000);
+        $this->SetTimerInterval(self::TIMER_BEZUG,
+            ($an ? max(0, $this->ReadPropertyInteger('IntervallBezug')) : 0) * 60 * 1000);
 
         $fehlt = $this->fehlendeDateien();
         if ($fehlt !== []) {
@@ -117,7 +134,11 @@ class SeriesRecorder extends IPSModule
 
         $vorschau = max(1, $this->ReadPropertyInteger('Vorschau'));
         $a = $this->baueAnalyse();
-        $e = $a->lauf(new XmltvLeser($this->pfad('XmltvDatei')), time() - 3600, time() + $vorschau * 86400);
+        // Die selbst geholte Datei hat Vorrang; fehlt sie, wird die des
+        // Altsystems gelesen. So laeuft das Modul in jeder Ausbaustufe.
+        $eigen = $this->pfad('XmltvZiel');
+        $quelle = is_readable($eigen) ? $eigen : $this->pfad('XmltvDatei');
+        $e = $a->lauf(new XmltvLeser($quelle), time() - 3600, time() + $vorschau * 86400);
 
         $this->SetValue('Zugeordnet', (int) ($e['kennzahlen']['zugeordnet'] ?? 0));
         $this->SetValue('OhneEmpfang', (int) ($e['kennzahlen']['Sender nicht empfangbar'] ?? 0));
@@ -134,6 +155,7 @@ class SeriesRecorder extends IPSModule
             $e['kennzahlen']['Serien mit Ausstrahlung'] ?? 0,
             $e['dauerMs'],
             $this->ReadPropertyBoolean('Armed') ? '' : ' (nur lesend)'));
+        $this->SendDebug('SR.quelle', 'gelesen aus ' . basename($quelle), 0);
 
         return json_encode(['ok' => true] + $e['kennzahlen'] + ['dauerMs' => $e['dauerMs']], JSON_UNESCAPED_UNICODE);
     }
@@ -145,6 +167,24 @@ class SeriesRecorder extends IPSModule
         $r->setAblagenamen($this->titeltabelle()['ablage']);
         $t = $r->bestimme($Titel);
         return json_encode($t ?? ['favorit' => null, 'grund' => 'kein Kandidat ueber der Schwelle'], JSON_UNESCAPED_UNICODE);
+    }
+
+    /**
+     * Holt die Programmvorschau vom Anbieter. Schreibt in die EIGENE Datei -
+     * das Altsystem behaelt seine, solange beide laufen.
+     */
+    public function HoleProgramm(): string
+    {
+        $url = trim($this->ReadPropertyString('XmltvUrl'));
+        if ($url === '') {
+            $this->SetValue('Bezug', 'keine Quelle eingetragen');
+            return json_encode(['ok' => false, 'grund' => 'keine URL']);
+        }
+        $b = new XmltvBezug($url, $this->pfad('XmltvZiel'), 180);
+        $e = $b->hole();
+        $this->SetValue('Bezug', sprintf('%s · %s · %.1f MB · %.1f s',
+            date('d.m. H:i'), $e['meldung'], $e['groesse'] / 1048576, $e['dauerMs'] / 1000));
+        return json_encode($e, JSON_UNESCAPED_UNICODE);
     }
 
     /** Diagnose: welche Nummer kennt der Episoden-Cache zu dieser Folge? */
@@ -187,7 +227,11 @@ class SeriesRecorder extends IPSModule
             'elements' => [
                 ['type' => 'CheckBox', 'name' => 'Aktiv', 'caption' => 'Aktiv'],
                 ['type' => 'CheckBox', 'name' => 'Armed', 'caption' => 'Scharf (schaltet Timer am Receiver - in diesem Stand ohne Wirkung)'],
-                ['type' => 'NumberSpinner', 'name' => 'Intervall', 'caption' => 'Intervall (Minuten, 0 = kein Timer)', 'minimum' => 0, 'maximum' => 1440],
+                ['type' => 'Label', 'caption' => '— Zeitsteuerung: 0 schaltet die jeweilige Aufgabe ab —'],
+                ['type' => 'NumberSpinner', 'name' => 'Intervall', 'caption' => 'Zuordnen und bewerten (Minuten)', 'minimum' => 0, 'maximum' => 10080],
+                ['type' => 'NumberSpinner', 'name' => 'IntervallBezug', 'caption' => 'Programmvorschau holen (Minuten)', 'minimum' => 0, 'maximum' => 10080],
+                ['type' => 'ValidationTextBox', 'name' => 'XmltvUrl', 'caption' => 'Quelle der Programmvorschau (URL)'],
+                ['type' => 'ValidationTextBox', 'name' => 'XmltvZiel', 'caption' => 'Zieldatei (eigene, nicht die des Altsystems)'],
                 ['type' => 'NumberSpinner', 'name' => 'Vorschau', 'caption' => 'Vorschau (Tage)', 'minimum' => 1, 'maximum' => 28],
                 ['type' => 'CheckBox', 'name' => 'Katalog', 'caption' => 'Fehlende Staffel/Folge im Episoden-Cache nachschlagen (kein Netzzugriff)'],
                 ['type' => 'ExpansionPanel', 'caption' => 'TMDB befragen, wenn der Cache nichts weiss', 'items' => [
@@ -248,6 +292,7 @@ class SeriesRecorder extends IPSModule
             ],
             'actions' => [
                 ['type' => 'Button', 'caption' => 'Jetzt lesen (ohne Wirkung)', 'onClick' => 'SR_Analyse($id);'],
+                ['type' => 'Button', 'caption' => 'Programmvorschau jetzt holen', 'onClick' => 'echo SR_HoleProgramm($id);'],
                 ['type' => 'RowLayout', 'items' => [
                     ['type' => 'ValidationTextBox', 'name' => 'ProbeTitel', 'caption' => 'Titel pruefen'],
                     ['type' => 'Button', 'caption' => 'Zuordnen', 'onClick' => 'echo SR_TitelProbe($id, $ProbeTitel);'],
