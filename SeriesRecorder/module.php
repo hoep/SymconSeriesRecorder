@@ -9,6 +9,7 @@ use Hoep\SeriesRecorder\Bedingungen;
 use Hoep\SeriesRecorder\Bestand;
 use Hoep\SeriesRecorder\Episodenkatalog;
 use Hoep\SeriesRecorder\Quellenkette;
+use Hoep\SeriesRecorder\TmdbQuelle;
 use Hoep\SeriesRecorder\TvdbQuelle;
 use Hoep\SeriesRecorder\KanalMapper;
 use Hoep\SeriesRecorder\TitelResolver;
@@ -49,6 +50,12 @@ class SeriesRecorder extends IPSModule
         $this->RegisterPropertyString('TvdbApiKey', '');
         $this->RegisterPropertyInteger('TvdbDeckel', 25);         // Abfragen je Lauf
         $this->RegisterPropertyInteger('TvdbCacheStunden', 168);
+        // TMDB sucht noch, TheTVDB nicht mehr - deshalb steht es in der Kette VOR
+        // TheTVDB und ist die Quelle fuer alles, was in keinem Cache steht.
+        $this->RegisterPropertyBoolean('TmdbNetz', false);
+        $this->RegisterPropertyString('TmdbApiKey', '');
+        $this->RegisterPropertyInteger('TmdbDeckel', 25);
+        $this->RegisterPropertyInteger('TmdbCacheStunden', 168);
 
         // Regeln als Daten, nicht als Code. In der Skript-Fassung standen sie als
         // PHP-Literale mitten im Ablauf - deshalb hat auch nie jemand bemerkt, dass
@@ -178,7 +185,15 @@ class SeriesRecorder extends IPSModule
                 ['type' => 'NumberSpinner', 'name' => 'Intervall', 'caption' => 'Intervall (Minuten, 0 = kein Timer)', 'minimum' => 0, 'maximum' => 1440],
                 ['type' => 'NumberSpinner', 'name' => 'Vorschau', 'caption' => 'Vorschau (Tage)', 'minimum' => 1, 'maximum' => 28],
                 ['type' => 'CheckBox', 'name' => 'Katalog', 'caption' => 'Fehlende Staffel/Folge im Episoden-Cache nachschlagen (kein Netzzugriff)'],
-                ['type' => 'ExpansionPanel', 'caption' => 'TheTVDB befragen, wenn der Cache nichts weiss', 'items' => [
+                ['type' => 'ExpansionPanel', 'caption' => 'TMDB befragen, wenn der Cache nichts weiss', 'items' => [
+                    ['type' => 'Label', 'caption' => 'Erste Wahl fuer unbekannte Serien: TMDB hat eine funktionierende Suche und liefert deutsche Titel.'],
+                    ['type' => 'CheckBox', 'name' => 'TmdbNetz', 'caption' => 'Netzzugriff erlauben'],
+                    ['type' => 'PasswordTextBox', 'name' => 'TmdbApiKey', 'caption' => 'API-Schluessel'],
+                    ['type' => 'NumberSpinner', 'name' => 'TmdbDeckel', 'caption' => 'Hoechstens Abfragen je Lauf', 'minimum' => 1, 'maximum' => 500],
+                    ['type' => 'NumberSpinner', 'name' => 'TmdbCacheStunden', 'caption' => 'Antworten gelten (Stunden)', 'minimum' => 1, 'maximum' => 8760],
+                ]],
+                ['type' => 'ExpansionPanel', 'caption' => 'TheTVDB befragen (findet nur bereits bekannte Serien)', 'items' => [
+                    ['type' => 'Label', 'caption' => 'Die Seriensuche von TheTVDB v3 ist abgeschaltet (404). Serien, deren ID noch nicht in der Ablage steht, findet diese Quelle nicht mehr.'],
                     ['type' => 'Label', 'caption' => 'Nur fuer Serien, die noch nicht in der Ablage stehen. Der Abruf wartet 500 ms zwischen zwei Anfragen und bis zu 30 s auf Antwort - deshalb der Deckel je Lauf.'],
                     ['type' => 'CheckBox', 'name' => 'TvdbNetz', 'caption' => 'Netzzugriff erlauben'],
                     ['type' => 'PasswordTextBox', 'name' => 'TvdbApiKey', 'caption' => 'API-Schluessel'],
@@ -341,6 +356,16 @@ class SeriesRecorder extends IPSModule
         $quellen = [];
         if ($this->ReadPropertyBoolean('Katalog')) {
             $quellen[] = new Episodenkatalog($this->ReadPropertyString('Datenpfad'));
+        }
+        // TMDB vor TheTVDB: dessen Seriensuche ist abgeschaltet (v3 antwortet auf
+        // /search/series mit 404), es findet also nur noch, was im Cache steht.
+        if ($this->ReadPropertyBoolean('TmdbNetz') && $this->ReadPropertyString('TmdbApiKey') !== '') {
+            $quellen[] = new TmdbQuelle(
+                rtrim($this->ReadPropertyString('Datenpfad'), '/') . '/tmdb',
+                $this->ReadPropertyString('TmdbApiKey'),
+                max(1, $this->ReadPropertyInteger('TmdbDeckel')),
+                max(1, $this->ReadPropertyInteger('TmdbCacheStunden'))
+            );
         }
         if ($this->ReadPropertyBoolean('TvdbNetz') && $this->ReadPropertyString('TvdbApiKey') !== '') {
             $quellen[] = new TvdbQuelle(
