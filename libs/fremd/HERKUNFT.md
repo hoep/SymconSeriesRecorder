@@ -52,3 +52,16 @@ Altersfrage und steht deshalb im Adapter.
 Eine fremde Anmeldestrecke nachzubauen hiesse, sie ein zweites Mal zu erraten -
 mit dem Ergebnis, dass bei der naechsten Aenderung der Webseite zwei Fassungen
 brechen statt einer.
+
+## serienrecorder.class.recorder.php (Enigma-Receiver)
+
+Unveraendert uebernommen (999 Zeilen). Spricht den Receiver ueber seine
+Web-Schnittstelle an: Kanalliste, Timerliste, Timer anlegen. Keine
+IPS-Aufrufe; vom Umfeld braucht sie `log()`, `seriesNamesMatch()` und
+`shouldRefreshFile()`.
+
+Genutzt wird davon in diesem Stand **nur `getTimerList()`** - ein GET auf
+`/web/timerlist`. Das Anlegen von Timern kann dieselbe Klasse
+(`/web/timeradd`), wird von der Fassade aber nicht angeboten: solange das
+Altsystem programmiert, waeren zwei Absender auf demselben Receiver ein Rezept
+fuer doppelte Aufnahmen.

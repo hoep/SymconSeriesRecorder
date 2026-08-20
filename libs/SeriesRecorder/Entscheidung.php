@@ -8,6 +8,7 @@ require_once __DIR__ . '/Bestand.php';
 require_once __DIR__ . '/EpisodenNummer.php';
 require_once __DIR__ . '/Bedingungen.php';
 require_once __DIR__ . '/Episodenkatalog.php';
+require_once __DIR__ . '/Receiver.php';
 require_once __DIR__ . '/Quellenkette.php';
 
 /**
@@ -19,8 +20,9 @@ require_once __DIR__ . '/Quellenkette.php';
  *   1. Weder Nummer noch Titel?       -> UNKLAR (nicht wiedererkennbar)
  *   2. Serien-Schranke verletzt?      -> AUSGESCHLOSSEN
  *   3. Schon einmal in dieser Liste?  -> MEHRFACH (nur die erste Ausstrahlung zaehlt)
- *   4. Liegt sie auf der Platte?      -> VORHANDEN
- *   5. sonst                          -> AUFNEHMEN
+ *   4. Am Receiver schon eingeplant?  -> PROGRAMMIERT
+ *   5. Liegt sie auf der Platte?      -> VORHANDEN
+ *   6. sonst                          -> AUFNEHMEN
  *
  * Punkt 1 vor Punkt 2 ist wichtig und war beim ersten Anlauf vertauscht: laeuft
  * eine bereits vorhandene Folge zweimal, nennt das Altsystem die erste
@@ -36,6 +38,7 @@ final class Entscheidung
     public const MEHRFACH  = 'mehrfach';
     public const UNKLAR    = 'unklar';
     public const AUSGESCHLOSSEN = 'ausgeschlossen';
+    public const PROGRAMMIERT   = 'programmiert';
 
     /** @var array<string,true> bereits gesehene Folgen dieses Laufs */
     private array $gesehen = [];
@@ -44,6 +47,7 @@ final class Entscheidung
         private Bestand $bestand,
         private ?Bedingungen $bedingungen = null,
         private ?EpisodenQuelle $katalog = null,
+        private ?Receiver $receiver = null,
     ) {
     }
 
@@ -54,7 +58,7 @@ final class Entscheidung
     }
 
     /**
-     * @param array{serie:string,titel:string,untertitel?:string,folgeNum?:string} $sendung
+     * @param array{serie:string,titel:string,untertitel?:string,folgeNum?:string,kanal?:string,start?:int,ende?:int} $sendung
      * @return array{urteil:string,staffel:int,folge:int,quelle:string,grund:string,dateien:list<string>}
      */
     public function fuer(array $sendung): array
@@ -111,6 +115,15 @@ final class Entscheidung
             return $ergebnis(self::MEHRFACH, 'laeuft in diesem Zeitraum erneut');
         }
         $this->gesehen[$schluessel] = true;
+
+        // Vor dem Bestand: was schon programmiert ist, muss nicht entschieden
+        // werden. Der Receiver ist die einzige Stelle, die das weiss - ohne ihn
+        // meldet das Modul 'fehlt', waehrend die Aufnahme laengst eingeplant ist.
+        if ($this->receiver !== null && ($sendung['start'] ?? 0) > 0
+            && $this->receiver->istProgrammiert((string) ($sendung['kanal'] ?? ''),
+                (int) $sendung['start'], (int) ($sendung['ende'] ?? $sendung['start']))) {
+            return $ergebnis(self::PROGRAMMIERT, 'am Receiver bereits eingeplant');
+        }
 
         $t = $this->bestand->suche($serie, $st, $fo, $eptitel);
         if ($t['da']) {

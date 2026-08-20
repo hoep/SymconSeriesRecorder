@@ -11,6 +11,7 @@ require_once __DIR__ . '/../libs/SeriesRecorder/TvdbQuelle.php';
 require_once __DIR__ . '/../libs/SeriesRecorder/XmltvBezug.php';
 require_once __DIR__ . '/../libs/SeriesRecorder/WunschlisteBezug.php';
 require_once __DIR__ . '/../libs/SeriesRecorder/Bestandsscan.php';
+require_once __DIR__ . '/../libs/SeriesRecorder/Receiver.php';
 
 use Hoep\SeriesRecorder\Analyse;
 use Hoep\SeriesRecorder\Bedingungen;
@@ -18,6 +19,7 @@ use Hoep\SeriesRecorder\Bestand;
 use Hoep\SeriesRecorder\Bestandsscan;
 use Hoep\SeriesRecorder\Episodenkatalog;
 use Hoep\SeriesRecorder\Quellenkette;
+use Hoep\SeriesRecorder\Receiver;
 use Hoep\SeriesRecorder\TmdbQuelle;
 use Hoep\SeriesRecorder\TvdbQuelle;
 use Hoep\SeriesRecorder\KanalMapper;
@@ -73,6 +75,9 @@ class SeriesRecorder extends IPSModule
         // Untergrenze gegen den Fall einer nicht eingebundenen Freigabe: darunter
         // gilt der Scan als fehlgeschlagen und die alte Liste bleibt stehen.
         $this->RegisterPropertyInteger('ScanMindestens', 50);
+        // Receiver: in diesem Stand NUR zum Lesen der Timerliste.
+        $this->RegisterPropertyString('ReceiverIp', '');
+        $this->RegisterPropertyString('ReceiverBouquet', '');
         $this->RegisterPropertyString('Datenpfad', '/var/lib/symcon/serienrecorder/');
         $this->RegisterPropertyString('XmltvDatei', 'xmltv.xml');
         $this->RegisterPropertyString('FavoritenDatei', 'favorites.xml');
@@ -117,6 +122,7 @@ class SeriesRecorder extends IPSModule
         $this->RegisterVariableInteger('OhneEmpfang', 'Verworfen (Sender fehlt)', '', 50);
         $this->RegisterVariableInteger('Aufnehmen', 'Fehlt im Bestand', '', 55);
         $this->RegisterVariableInteger('Ausgeschlossen', 'Durch Schranke verworfen', '', 56);
+        $this->RegisterVariableInteger('Programmiert', 'Am Receiver eingeplant', '', 57);
         $this->RegisterVariableString('Ausstrahlungen', 'Ausstrahlungen (JSON)', '', 60);
         $this->RegisterVariableString('OffeneSender', 'Sender ohne Empfangskanal', '', 70);
         $this->RegisterVariableString('Quellen', 'Episodenquellen', '', 80);
@@ -170,6 +176,7 @@ class SeriesRecorder extends IPSModule
         $this->SetValue('Zugeordnet', (int) ($e['kennzahlen']['zugeordnet'] ?? 0));
         $this->SetValue('OhneEmpfang', (int) ($e['kennzahlen']['Sender nicht empfangbar'] ?? 0));
         $this->SetValue('Aufnehmen', (int) ($e['kennzahlen']['aufnehmen'] ?? 0));
+        $this->SetValue('Programmiert', (int) ($e['kennzahlen']['programmiert'] ?? 0));
         $this->SetValue('Ausgeschlossen', (int) ($e['kennzahlen']['ausgeschlossen'] ?? 0));
         $this->SetValue('Dauer', $e['dauerMs']);
         $this->SetValue('LetzterLauf', time());
@@ -297,6 +304,9 @@ class SeriesRecorder extends IPSModule
                 ['type' => 'ValidationTextBox', 'name' => 'Aufnahmepfade', 'caption' => 'Aufnahmeverzeichnisse (mit Komma trennen)'],
                 ['type' => 'ValidationTextBox', 'name' => 'ScanZiel', 'caption' => 'Bestandsliste (eigene)'],
                 ['type' => 'NumberSpinner', 'name' => 'ScanMindestens', 'caption' => 'Weniger Funde = Scan gilt als fehlgeschlagen', 'minimum' => 1, 'maximum' => 100000],
+                ['type' => 'Label', 'caption' => '— Receiver: wird in diesem Stand NUR gelesen (programmierte Aufnahmen) —'],
+                ['type' => 'ValidationTextBox', 'name' => 'ReceiverIp', 'caption' => 'Adresse'],
+                ['type' => 'ValidationTextBox', 'name' => 'ReceiverBouquet', 'caption' => 'Bouquet (optional)'],
                 ['type' => 'ExpansionPanel', 'caption' => 'Zugang zur Wunschliste', 'items' => [
                     ['type' => 'ValidationTextBox', 'name' => 'WunschBenutzer', 'caption' => 'Benutzer'],
                     ['type' => 'PasswordTextBox', 'name' => 'WunschPasswort', 'caption' => 'Passwort'],
@@ -401,7 +411,7 @@ class SeriesRecorder extends IPSModule
         $tt = $this->titeltabelle();
         return new Analyse($this->favoriten(), $tt['aliase'], $tt['ablage'], $this->empfangbar(),
             $this->kanaltabelle(), new Bestand($this->bestandsdatei()), $this->bedingungen(),
-            $this->episodenquelle());
+            $this->episodenquelle(), $this->receiver());
     }
 
     private function pfad(string $property): string
@@ -503,6 +513,13 @@ class SeriesRecorder extends IPSModule
             return null;
         }
         return count($quellen) === 1 ? $quellen[0] : new Quellenkette(...$quellen);
+    }
+
+    /** Nur wenn eine Adresse eingetragen ist - sonst bleibt der Receiver aussen vor. */
+    private function receiver(): ?Receiver
+    {
+        $ip = trim($this->ReadPropertyString('ReceiverIp'));
+        return $ip === '' ? null : new Receiver($ip, trim($this->ReadPropertyString('ReceiverBouquet')));
     }
 
     /** Die selbst aufgenommene Liste hat Vorrang, sonst die des Altsystems. */
