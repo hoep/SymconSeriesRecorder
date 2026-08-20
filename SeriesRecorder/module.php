@@ -5,6 +5,7 @@ declare(strict_types=1);
 require_once __DIR__ . '/../libs/SeriesRecorder/Analyse.php';
 
 use Hoep\SeriesRecorder\Analyse;
+use Hoep\SeriesRecorder\Bedingungen;
 use Hoep\SeriesRecorder\Bestand;
 use Hoep\SeriesRecorder\KanalMapper;
 use Hoep\SeriesRecorder\TitelResolver;
@@ -44,6 +45,7 @@ class SeriesRecorder extends IPSModule
         // die Tatort-Bedingung faktisch jede Tatort-Ausstrahlung verwarf.
         $this->RegisterPropertyString('Kanaltabelle', '[]');      // XMLTV-Name => Empfangskanal
         $this->RegisterPropertyString('Titeltabelle', '[]');      // XMLTV-Titel => Favorit + Ablagename
+        $this->RegisterPropertyString('Bedingungen', '[]');       // Serie + Feld + Vergleich + Wert
 
         $this->RegisterTimer(self::TIMER_LAUF, 0, 'SR_Analyse($_IPS[\'TARGET\']);');
     }
@@ -58,6 +60,7 @@ class SeriesRecorder extends IPSModule
         $this->RegisterVariableInteger('Zugeordnet', 'Zugeordnete Ausstrahlungen', '', 40);
         $this->RegisterVariableInteger('OhneEmpfang', 'Verworfen (Sender fehlt)', '', 50);
         $this->RegisterVariableInteger('Aufnehmen', 'Fehlt im Bestand', '', 55);
+        $this->RegisterVariableInteger('Ausgeschlossen', 'Durch Schranke verworfen', '', 56);
         $this->RegisterVariableString('Ausstrahlungen', 'Ausstrahlungen (JSON)', '', 60);
         $this->RegisterVariableString('OffeneSender', 'Sender ohne Empfangskanal', '', 70);
 
@@ -96,6 +99,7 @@ class SeriesRecorder extends IPSModule
         $this->SetValue('Zugeordnet', (int) ($e['kennzahlen']['zugeordnet'] ?? 0));
         $this->SetValue('OhneEmpfang', (int) ($e['kennzahlen']['Sender nicht empfangbar'] ?? 0));
         $this->SetValue('Aufnehmen', (int) ($e['kennzahlen']['aufnehmen'] ?? 0));
+        $this->SetValue('Ausgeschlossen', (int) ($e['kennzahlen']['ausgeschlossen'] ?? 0));
         $this->SetValue('Dauer', $e['dauerMs']);
         $this->SetValue('LetzterLauf', time());
         $this->SetValue('Ausstrahlungen', json_encode(Analyse::alsTabelle($e['sendungen']), JSON_UNESCAPED_UNICODE));
@@ -117,6 +121,12 @@ class SeriesRecorder extends IPSModule
         $r->setAblagenamen($this->titeltabelle()['ablage']);
         $t = $r->bestimme($Titel);
         return json_encode($t ?? ['favorit' => null, 'grund' => 'kein Kandidat ueber der Schwelle'], JSON_UNESCAPED_UNICODE);
+    }
+
+    /** Diagnose: greift fuer diese Folge eine Serien-Schranke? */
+    public function RegelProbe(string $Serie, int $Staffel, int $Folge): string
+    {
+        return json_encode($this->bedingungen()->pruefe($Serie, $Staffel, $Folge), JSON_UNESCAPED_UNICODE);
     }
 
     /** Diagnose: auf welchem Empfangskanal landet dieser XMLTV-Sender? */
@@ -163,6 +173,26 @@ class SeriesRecorder extends IPSModule
                     ['caption' => 'Favorit', 'name' => 'favorit', 'width' => '240px', 'add' => '', 'edit' => ['type' => 'ValidationTextBox']],
                     ['caption' => 'Ablagename', 'name' => 'ablage', 'width' => 'auto', 'add' => '', 'edit' => ['type' => 'ValidationTextBox']],
                  ]],
+                ['type' => 'Label', 'caption' => '— Schranken je Serie: mehrere Zeilen zur selben Serie gelten alle zugleich —'],
+                ['type' => 'List', 'name' => 'Bedingungen', 'caption' => 'Ohne Eintrag gilt keine Schranke',
+                 'add' => true, 'delete' => true, 'columns' => [
+                    ['caption' => 'Serie', 'name' => 'serie', 'width' => '240px', 'add' => '', 'edit' => ['type' => 'ValidationTextBox']],
+                    ['caption' => 'Feld', 'name' => 'feld', 'width' => '140px', 'add' => 'season',
+                     'edit' => ['type' => 'Select', 'options' => [
+                        ['caption' => 'Staffel', 'value' => 'season'],
+                        ['caption' => 'Folge', 'value' => 'episode'],
+                     ]]],
+                    ['caption' => 'Vergleich', 'name' => 'op', 'width' => '110px', 'add' => '>=',
+                     'edit' => ['type' => 'Select', 'options' => [
+                        ['caption' => 'ist mindestens (>=)', 'value' => '>='],
+                        ['caption' => 'ist groesser (>)', 'value' => '>'],
+                        ['caption' => 'ist hoechstens (<=)', 'value' => '<='],
+                        ['caption' => 'ist kleiner (<)', 'value' => '<'],
+                        ['caption' => 'ist gleich (==)', 'value' => '=='],
+                        ['caption' => 'ist ungleich (!=)', 'value' => '!='],
+                     ]]],
+                    ['caption' => 'Wert', 'name' => 'wert', 'width' => 'auto', 'add' => 0, 'edit' => ['type' => 'NumberSpinner']],
+                 ]],
             ],
             'actions' => [
                 ['type' => 'Button', 'caption' => 'Jetzt lesen (ohne Wirkung)', 'onClick' => 'SR_Analyse($id);'],
@@ -173,6 +203,12 @@ class SeriesRecorder extends IPSModule
                 ['type' => 'RowLayout', 'items' => [
                     ['type' => 'ValidationTextBox', 'name' => 'ProbeSender', 'caption' => 'Sender pruefen'],
                     ['type' => 'Button', 'caption' => 'Zuordnen', 'onClick' => 'echo SR_KanalProbe($id, $ProbeSender);'],
+                ]],
+                ['type' => 'RowLayout', 'items' => [
+                    ['type' => 'ValidationTextBox', 'name' => 'ProbeSerie', 'caption' => 'Serie'],
+                    ['type' => 'NumberSpinner', 'name' => 'ProbeStaffel', 'caption' => 'Staffel'],
+                    ['type' => 'NumberSpinner', 'name' => 'ProbeFolge', 'caption' => 'Folge'],
+                    ['type' => 'Button', 'caption' => 'Schranke pruefen', 'onClick' => 'echo SR_RegelProbe($id, $ProbeSerie, $ProbeStaffel, $ProbeFolge);'],
                 ]],
             ],
             'status' => [
@@ -190,7 +226,7 @@ class SeriesRecorder extends IPSModule
     {
         $tt = $this->titeltabelle();
         return new Analyse($this->favoriten(), $tt['aliase'], $tt['ablage'], $this->empfangbar(),
-            $this->kanaltabelle(), new Bestand($this->pfad('BestandDatei')));
+            $this->kanaltabelle(), new Bestand($this->pfad('BestandDatei')), $this->bedingungen());
     }
 
     private function pfad(string $property): string
@@ -253,6 +289,12 @@ class SeriesRecorder extends IPSModule
             }
         }
         return $out;
+    }
+
+    private function bedingungen(): Bedingungen
+    {
+        $liste = json_decode($this->ReadPropertyString('Bedingungen'), true) ?: [];
+        return new Bedingungen(is_array($liste) ? $liste : []);
     }
 
     /** @return array{aliase:array<string,string>,ablage:array<string,string>} */

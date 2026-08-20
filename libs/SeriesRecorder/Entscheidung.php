@@ -6,6 +6,7 @@ namespace Hoep\SeriesRecorder;
 
 require_once __DIR__ . '/Bestand.php';
 require_once __DIR__ . '/EpisodenNummer.php';
+require_once __DIR__ . '/Bedingungen.php';
 
 /**
  * Was soll mit einer Ausstrahlung geschehen?
@@ -13,10 +14,11 @@ require_once __DIR__ . '/EpisodenNummer.php';
  * Die Reihenfolge der Pruefungen ist die eigentliche Aussage - sie entscheidet,
  * welches Etikett eine Sendung bekommt, die mehrere Kriterien erfuellt:
  *
- *   1. Schon einmal in dieser Liste?  -> MEHRFACH (nur die erste Ausstrahlung zaehlt)
- *   2. Liegt sie auf der Platte?      -> VORHANDEN
- *   3. Weder Nummer noch Titel?       -> UNKLAR
- *   4. sonst                          -> AUFNEHMEN
+ *   1. Weder Nummer noch Titel?       -> UNKLAR (nicht wiedererkennbar)
+ *   2. Serien-Schranke verletzt?      -> AUSGESCHLOSSEN
+ *   3. Schon einmal in dieser Liste?  -> MEHRFACH (nur die erste Ausstrahlung zaehlt)
+ *   4. Liegt sie auf der Platte?      -> VORHANDEN
+ *   5. sonst                          -> AUFNEHMEN
  *
  * Punkt 1 vor Punkt 2 ist wichtig und war beim ersten Anlauf vertauscht: laeuft
  * eine bereits vorhandene Folge zweimal, nennt das Altsystem die erste
@@ -31,12 +33,15 @@ final class Entscheidung
     public const VORHANDEN = 'vorhanden';
     public const MEHRFACH  = 'mehrfach';
     public const UNKLAR    = 'unklar';
+    public const AUSGESCHLOSSEN = 'ausgeschlossen';
 
     /** @var array<string,true> bereits gesehene Folgen dieses Laufs */
     private array $gesehen = [];
 
-    public function __construct(private Bestand $bestand)
-    {
+    public function __construct(
+        private Bestand $bestand,
+        private ?Bedingungen $bedingungen = null,
+    ) {
     }
 
     /** Vor jedem Durchlauf zuruecksetzen - "mehrfach" gilt je Lauf, nicht ewig. */
@@ -71,6 +76,16 @@ final class Entscheidung
         // aufzunehmen hiesse, sie bei jeder Wiederholung erneut aufzunehmen.
         if ($st === 0 && $fo === 0 && $eptitel === '') {
             return $ergebnis(self::UNKLAR, 'weder Staffel/Folge noch Episodentitel im EPG');
+        }
+
+        // Serien-Schranken VOR allem anderen: was ausgeschlossen ist, soll auch
+        // nicht als "mehrfach" oder "vorhanden" in den Zahlen auftauchen - es ist
+        // schlicht kein Kandidat.
+        if ($this->bedingungen !== null) {
+            $b = $this->bedingungen->pruefe($serie, $st, $fo);
+            if (!$b['erlaubt']) {
+                return $ergebnis(self::AUSGESCHLOSSEN, $b['grund']);
+            }
         }
 
         $schluessel = Bestand::form($serie) . '|' . $st . '|' . $fo . '|' . Bestand::form($eptitel);
