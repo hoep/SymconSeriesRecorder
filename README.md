@@ -76,3 +76,27 @@ Zeitfenster 20.-26.08., derselbe Datenbestand:
     Verlust       0
     zusaetzlich  29   (Walking on Sunshine 22, Law & Order 4, Kroatien-Krimi 2,
                        Barcelona-Krimi 2, Barbie 1)
+
+## Abdeckung gegenueber der Skript-Fassung
+
+Die alte Fassung hat 284 Methoden in 15 Klassen. Was davon im Modul steckt:
+
+| Bereich                     | alt | Stand |
+|-----------------------------|----:|-------|
+| Matching (Titel/Sender)     |  23 | neu gebaut, ersetzt |
+| XMLTV lesen                 |  15 | Lesen/Parsen ja, Download und Vorfilter-Datei nein |
+| Wunschliste (Web)           |  15 | offen - das Modul liest die Datei, die das Altsystem schreibt |
+| Episoden-Logik              |  35 | offen |
+| TVDB-Anreicherung           |  18 | offen (kapseln, nicht neu schreiben) |
+| Aufnahmen-Bestand (Platte)  |  31 | offen (kapseln) |
+| Receiver-API (Enigma)       |  60 | offen (kapseln) |
+| Duplikate                   |   5 | offen |
+| Orchestrierung              |  82 | teilweise, faellt groesstenteils weg |
+
+Das Modul beantwortet heute **"was laeuft?"**. Es beantwortet noch NICHT
+"habe ich das schon?", "programmiere das" und "raeum auf" - genau dafuer sind
+die Phasen 2 und 3 da.
+
+Wichtig fuer den Parallellauf: das Altsystem entscheidet je Ausstrahlung
+zusaetzlich Vorhanden / Mehrfach / Programmiert / Unklar. Solange das Modul das
+nicht kann, vergleicht man nur die Trefferliste, nicht die Entscheidung.
