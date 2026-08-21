@@ -141,11 +141,38 @@ final class TitelResolver
             }
         }
         if ($beste === null || $beste['punkte'] < self::SCHWELLE) {
+            // Knapp daneben ist die interessanteste Auskunft, die dieser Resolver
+            // geben kann: "Der Wien-Krimi: Blind ermittelt" mit 48 Punkten auf
+            // "Blind ermittelt" heisst, dass eine Zeile in der Titeltabelle fehlt.
+            // Ohne diesen Merker sieht man nur, dass nichts zugeordnet wurde.
+            $this->letzterFastTreffer = ($beste === null) ? null
+                : ['favorit' => (string) $beste['favorit'], 'punkte' => (int) $beste['punkte'],
+                   'regel' => (string) $beste['regel']];
             return null;
         }
+        $this->letzterFastTreffer = null;
         unset($beste['_laenge']);
         $beste['ablage'] = $this->ablage[$beste['favorit']] ?? $beste['favorit'];
         return $beste;
+    }
+
+    /** @var array{favorit:string,punkte:int,regel:string}|null */
+    private ?array $letzterFastTreffer = null;
+
+    /**
+     * Der beste Kandidat des letzten `bestimme()`, der die Schwelle NICHT
+     * erreicht hat. Nur unmittelbar danach gueltig.
+     *
+     * @return array{favorit:string,punkte:int,regel:string}|null
+     */
+    public function fastTreffer(): ?array
+    {
+        return $this->letzterFastTreffer;
+    }
+
+    public static function schwelle(): int
+    {
+        return self::SCHWELLE;
     }
 
     /** @param array{name:string,norm:string,laenge:int} $k */

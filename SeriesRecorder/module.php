@@ -176,6 +176,9 @@ class SeriesRecorder extends IPSModule
         $this->RegisterVariableString('Serien', 'Serien (JSON)', '', 140);
         $this->RegisterVariableString('Programmierung', 'Programmierung', '', 150);
         $this->RegisterVariableString('ProgrammListe', 'Programmierung (JSON)', '', 160);
+        $this->RegisterVariableString('Matching', 'Matching (JSON)', '', 170);
+        $this->RegisterVariableString('Protokoll', 'Protokoll (JSON)', '', 180);
+        $this->RegisterVariableString('Kennzahlen', 'Kennzahlen (JSON)', '', 190);
 
         $an = $this->ReadPropertyBoolean('Aktiv');
         $this->SetTimerInterval(self::TIMER_LAUF,
@@ -237,6 +240,11 @@ class SeriesRecorder extends IPSModule
         $this->SetValue('Ausstrahlungen', json_encode(Analyse::alsTabelle($e['sendungen']), JSON_UNESCAPED_UNICODE));
         $this->SetValue('OffeneSender', implode("\n", $e['offeneSender']));
         $this->SetValue('Serien', $this->serientabelle($e['sendungen']));
+        $this->SetValue('Matching', (string) json_encode(
+            Analyse::fastAlsTabelle((array) ($e['fastTreffer'] ?? []), TitelResolver::schwelle()),
+            JSON_UNESCAPED_UNICODE));
+        $this->SetValue('Kennzahlen', $this->kennzahlentabelle($e));
+        $this->SetValue('Protokoll', $this->protokolltabelle());
         $this->SetValue('Quellen', (string) ($e['quellen'] ?? ''));
         $this->SetValue('Status', sprintf('%d Ausstrahlungen, davon %d fehlend; %d Serien, %d ms%s',
             $e['kennzahlen']['zugeordnet'] ?? 0,
@@ -1370,6 +1378,86 @@ class SeriesRecorder extends IPSModule
             $name .= ' - ' . $ep;
         }
         return $name;
+    }
+
+    /**
+     * Kennzahlen des letzten Laufs als Tabelle.
+     *
+     * @param array<string,mixed> $e
+     */
+    private function kennzahlentabelle(array $e): string
+    {
+        $k = (array) ($e['kennzahlen'] ?? []);
+        $zeilen = [['Kennzahl', 'Wert']];
+        $paare = [
+            'geprueft'                 => 'Sendungen im Fenster',
+            'zugeordnet'               => 'einem Favoriten zugeordnet',
+            'Serien mit Ausstrahlung'  => 'Serien mit Ausstrahlung',
+            'vorhanden'                => 'liegt bereits vor',
+            'mehrfach'                 => 'laeuft mehrfach',
+            'programmiert'             => 'am Receiver eingeplant',
+            'aufnehmen'                => 'fehlt im Bestand',
+            'ausgeschlossen'           => 'durch Schranke verworfen',
+            'unklar'                   => 'nicht wiedererkennbar',
+            'Sender nicht empfangbar'  => 'Sender fehlt',
+            'ohne Favorit'             => 'kein Favorit',
+        ];
+        foreach ($paare as $feld => $text) {
+            if (isset($k[$feld])) {
+                $zeilen[] = [$text, (string) $k[$feld]];
+            }
+        }
+        $zeilen[] = ['Rechenzeit', ((int) ($e['dauerMs'] ?? 0)) . ' ms'];
+        return (string) json_encode($zeilen, JSON_UNESCAPED_UNICODE);
+    }
+
+    /**
+     * Betriebsprotokoll: was hat wann zuletzt gearbeitet.
+     *
+     * Ersetzt das Protokoll des Altsystems, das die Meldungen EINES Laufs
+     * auflistete. Hier steht stattdessen der Stand jedes Vorgangs mit seinem
+     * Zeitpunkt - das ist die Frage, die man an ein laufendes System hat:
+     * laeuft noch alles, und wann war es zuletzt dran.
+     */
+    private function protokolltabelle(): string
+    {
+        $zeilen = [['Vorgang', 'zuletzt', 'Ergebnis']];
+        $reihe = [
+            'Status'         => 'Analyse',
+            'Programmierung' => 'Programmierung',
+            'Bezug'          => 'Programmvorschau geholt',
+            'Wunschliste'    => 'Wunschliste geholt',
+            'Bestand'        => 'Bestand gescannt',
+            'Duplikate'      => 'Duplikate geprueft',
+            'Quellen'        => 'Episodenquellen',
+            'OffeneSender'   => 'Sender ohne Empfangskanal',
+        ];
+        foreach ($reihe as $ident => $text) {
+            $vid = @IPS_GetObjectIDByIdent($ident, $this->InstanceID);
+            if (!$vid) {
+                continue;
+            }
+            $wert = trim((string) GetValue($vid));
+            $v = IPS_GetVariable($vid);
+            $zeilen[] = [$text,
+                         $v['VariableUpdated'] > 0 ? date('d.m. H:i', $v['VariableUpdated']) : '',
+                         $wert === '' ? '-' : mb_substr(str_replace("\n", ' · ', $wert), 0, 160)];
+        }
+        // Der Receiver gehoert dazu: ohne ihn programmiert niemand.
+        $er = $this->ReadPropertyInteger('ErInstanz');
+        if ($er > 0 && @IPS_InstanceExists($er)) {
+            foreach (['Meldung' => 'Receiver: letzte Handlung', 'TimerAnzahl' => 'Receiver: Timer',
+                      'Erreichbar' => 'Receiver: erreichbar'] as $ident => $text) {
+                $vid = @IPS_GetObjectIDByIdent($ident, $er);
+                if (!$vid) {
+                    continue;
+                }
+                $v = IPS_GetVariable($vid);
+                $zeilen[] = [$text, date('d.m. H:i', $v['VariableUpdated']),
+                             mb_substr((string) GetValueFormatted($vid), 0, 160)];
+            }
+        }
+        return (string) json_encode($zeilen, JSON_UNESCAPED_UNICODE);
     }
 
     private function staffelregeln(): Staffelregeln
