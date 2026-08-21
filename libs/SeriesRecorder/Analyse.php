@@ -34,6 +34,7 @@ final class Analyse
         private ?Bedingungen $bedingungen = null,
         private ?EpisodenQuelle $katalog = null,
         private ?Receiver $receiver = null,
+        private ?Staffelregeln $staffelregeln = null,
     ) {
     }
 
@@ -65,7 +66,9 @@ final class Analyse
         // Ohne Bestandsliste bleibt es beim "was laeuft" - die Entscheidung, ob eine
         // Folge fehlt, braucht die Platte. Beides getrennt, damit der Lauf auch dann
         // etwas liefert, wenn der Scanner gerade nichts geschrieben hat.
-        $urteiler = $this->bestand !== null ? new Entscheidung($this->bestand, $this->bedingungen, $this->katalog, $this->receiver) : null;
+        $urteiler = $this->bestand !== null
+            ? new Entscheidung($this->bestand, $this->bedingungen, $this->katalog, $this->receiver, $this->staffelregeln)
+            : null;
         $urteiler?->beginneLauf();
 
         $treffer = [];

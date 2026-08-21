@@ -13,10 +13,13 @@ require_once __DIR__ . '/../libs/SeriesRecorder/WunschlisteBezug.php';
 require_once __DIR__ . '/../libs/SeriesRecorder/Bestandsscan.php';
 require_once __DIR__ . '/../libs/SeriesRecorder/Receiver.php';
 require_once __DIR__ . '/../libs/SeriesRecorder/Duplikate.php';
+require_once __DIR__ . '/../libs/SeriesRecorder/Katalogverweise.php';
 require_once __DIR__ . '/../libs/SeriesRecorder/Dateisatz.php';
 
 use Hoep\SeriesRecorder\Analyse;
 use Hoep\SeriesRecorder\Bedingungen;
+use Hoep\SeriesRecorder\Staffelregeln;
+use Hoep\SeriesRecorder\Katalogverweise;
 use Hoep\SeriesRecorder\Bestand;
 use Hoep\SeriesRecorder\Bestandsscan;
 use Hoep\SeriesRecorder\Dateisatz;
@@ -124,6 +127,7 @@ class SeriesRecorder extends IPSModule
         $this->RegisterPropertyString('Kanaltabelle', '[]');      // XMLTV-Name => Empfangskanal
         $this->RegisterPropertyString('Titeltabelle', '[]');      // XMLTV-Titel => Favorit + Ablagename
         $this->RegisterPropertyString('Bedingungen', '[]');       // Serie + Feld + Vergleich + Wert
+        $this->RegisterPropertyString('Staffeltabelle', '[]');    // Serie + von + nach
 
         $this->RegisterTimer(self::TIMER_LAUF, 0, 'SR_Analyse($_IPS[\'TARGET\']);');
         $this->RegisterTimer(self::TIMER_BEZUG, 0, 'SR_HoleProgramm($_IPS[\'TARGET\']);');
@@ -152,6 +156,7 @@ class SeriesRecorder extends IPSModule
         $this->RegisterVariableString('Bestand', 'Bestand aufgenommen', '', 110);
         $this->RegisterVariableString('Duplikate', 'Duplikate geprueft', '', 120);
         $this->RegisterVariableString('DuplikateListe', 'Duplikate (JSON)', '', 130);
+        $this->RegisterVariableString('Serien', 'Serien (JSON)', '', 140);
 
         $an = $this->ReadPropertyBoolean('Aktiv');
         $this->SetTimerInterval(self::TIMER_LAUF,
@@ -207,6 +212,7 @@ class SeriesRecorder extends IPSModule
         $this->SetValue('LetzterLauf', time());
         $this->SetValue('Ausstrahlungen', json_encode(Analyse::alsTabelle($e['sendungen']), JSON_UNESCAPED_UNICODE));
         $this->SetValue('OffeneSender', implode("\n", $e['offeneSender']));
+        $this->SetValue('Serien', $this->serientabelle($e['sendungen']));
         $this->SetValue('Quellen', (string) ($e['quellen'] ?? ''));
         $this->SetValue('Status', sprintf('%d Ausstrahlungen, davon %d fehlend; %d Serien, %d ms%s',
             $e['kennzahlen']['zugeordnet'] ?? 0,
@@ -217,6 +223,20 @@ class SeriesRecorder extends IPSModule
         $this->SendDebug('SR.quelle', 'gelesen aus ' . basename($quelle), 0);
 
         return json_encode(['ok' => true] + $e['kennzahlen'] + ['dauerMs' => $e['dauerMs']], JSON_UNESCAPED_UNICODE);
+    }
+
+    /**
+     * Serienuebersicht: was laeuft, welche Staffelregel greift, und wie fuehren
+     * die Datenbanken die Reihe.
+     *
+     * Die Verweise sind der eigentliche Zweck. Ob eine Staffelregel noetig ist,
+     * entscheidet sich daran, wie TheTVDB oder TMDB zaehlen - und das sieht man
+     * in zehn Sekunden auf deren Seite, wenn man den Link hat. Gebaut wird die
+     * Tabelle aus den lokalen Ablagen, ohne einen einzigen Netzaufruf.
+     */
+    public function Serienuebersicht(): string
+    {
+        return $this->serientabelle(null);
     }
 
     /** Diagnose: welchem Favoriten wuerde dieser Titel zugeordnet? */
@@ -834,6 +854,15 @@ class SeriesRecorder extends IPSModule
                      ]]],
                     ['caption' => 'Wert', 'name' => 'wert', 'width' => 'auto', 'add' => 0, 'edit' => ['type' => 'NumberSpinner']],
                  ]],
+                ['type' => 'Label', 'caption' => '— Staffel berichtigen: was das EPG nicht kennt, landet sonst in "Season 0" —'],
+                ['type' => 'List', 'name' => 'Staffeltabelle',
+                 'caption' => 'von: "0" = nur wenn keine Staffel bekannt ist, "*" = jede Staffel',
+                 'add' => true, 'delete' => true, 'columns' => [
+                    ['caption' => 'Serie', 'name' => 'serie', 'width' => '300px', 'add' => '', 'edit' => ['type' => 'ValidationTextBox']],
+                    ['caption' => 'von', 'name' => 'von', 'width' => '120px', 'add' => '0',
+                     'edit' => ['type' => 'ValidationTextBox', 'validate' => '^(\\*|\\d{1,4})$']],
+                    ['caption' => 'nach', 'name' => 'nach', 'width' => 'auto', 'add' => 1, 'edit' => ['type' => 'NumberSpinner', 'minimum' => 1, 'maximum' => 9999]],
+                 ]],
             ],
             'actions' => [
                 ['type' => 'List', 'name' => 'DuplikateAnsicht', 'caption' => 'Mehrfach vorhandene Aufnahmen',
@@ -890,7 +919,7 @@ class SeriesRecorder extends IPSModule
         $tt = $this->titeltabelle();
         return new Analyse($this->favoriten(), $tt['aliase'], $tt['ablage'], $this->empfangbar(),
             $this->kanaltabelle(), new Bestand($this->bestandsdatei()), $this->bedingungen(),
-            $this->episodenquelle(), $this->receiver());
+            $this->episodenquelle(), $this->receiver(), $this->staffelregeln());
     }
 
     private function pfad(string $property): string
@@ -1091,6 +1120,71 @@ class SeriesRecorder extends IPSModule
     {
         $liste = json_decode($this->ReadPropertyString('Bedingungen'), true) ?: [];
         return new Bedingungen(is_array($liste) ? $liste : []);
+    }
+
+    /**
+     * Zeilen fuer die Serienuebersicht.
+     *
+     * @param list<array<string,mixed>>|null $sendungen Ausstrahlungen des letzten
+     *        Laufs; ohne sie bleiben die Zaehlspalten leer.
+     */
+    private function serientabelle(?array $sendungen): string
+    {
+        $verweise = new Katalogverweise(rtrim($this->ReadPropertyString('Datenpfad'), '/'));
+        $regeln = json_decode($this->ReadPropertyString('Staffeltabelle'), true) ?: [];
+        $regelText = [];
+        foreach ($regeln as $z) {
+            $serie = trim((string) ($z['serie'] ?? ''));
+            if ($serie === '') {
+                continue;
+            }
+            $von = trim((string) ($z['von'] ?? ''));
+            $regelText[Bestand::form($serie)][] =
+                (($von === '' || $von === '*') ? 'jede Staffel' : ('S' . str_pad($von, 2, '0', STR_PAD_LEFT)))
+                . ' → S' . str_pad((string) (int) ($z['nach'] ?? 0), 2, '0', STR_PAD_LEFT);
+        }
+
+        // Was laeuft, und wie es gezaehlt wird - je Serie zusammengefasst.
+        $anzahl = [];
+        $ohne = [];
+        foreach ((array) $sendungen as $x) {
+            $serie = (string) ($x['serie'] ?? '');
+            if ($serie === '') {
+                continue;
+            }
+            $anzahl[$serie] = ($anzahl[$serie] ?? 0) + 1;
+            if (trim((string) ($x['staffelFolge'] ?? '')) === '' || str_starts_with((string) $x['staffelFolge'], 'S00')) {
+                $ohne[$serie] = ($ohne[$serie] ?? 0) + 1;
+            }
+        }
+
+        $link = static function (string $url, string $text): string {
+            return $url === '' ? '' : '<a href="' . $url . '" target="_blank" rel="noopener">' . $text . '</a>';
+        };
+
+        $zeilen = [['Serie', 'Ausstrahlungen', 'ohne Staffel', 'Staffelregel', 'TheTVDB', 'TMDB']];
+        $namen = $this->favoriten();
+        sort($namen, SORT_NATURAL | SORT_FLAG_CASE);
+        foreach ($namen as $serie) {
+            $v = $verweise->fuer($serie);
+            $s = Katalogverweise::suche($serie);
+            $k = Bestand::form($serie);
+            $zeilen[] = [
+                $serie,
+                (string) ($anzahl[$serie] ?? ''),
+                (string) ($ohne[$serie] ?? ''),
+                implode(', ', $regelText[$k] ?? []),
+                $v['tvdb'] !== '' ? $link($v['tvdb'], $v['tvdbName'] !== '' ? $v['tvdbName'] : 'öffnen') : $link($s['tvdb'], 'suchen'),
+                $v['tmdb'] !== '' ? $link($v['tmdb'], $v['tmdbName'] !== '' ? $v['tmdbName'] : 'öffnen') : $link($s['tmdb'], 'suchen'),
+            ];
+        }
+        return (string) json_encode($zeilen, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    }
+
+    private function staffelregeln(): Staffelregeln
+    {
+        $liste = json_decode($this->ReadPropertyString('Staffeltabelle'), true) ?: [];
+        return new Staffelregeln(is_array($liste) ? $liste : []);
     }
 
     /** @return array{aliase:array<string,string>,ablage:array<string,string>} */
