@@ -57,6 +57,7 @@ class SeriesRecorder extends IPSModule
     private const TIMER_WUNSCH = 'Wunschliste';
     private const TIMER_SCAN   = 'Bestandsscan';
     private const TIMER_DUP    = 'Duplikate';
+    private const TIMER_PROG   = 'Programmieren';
 
     public function Create(): void
     {
@@ -129,11 +130,20 @@ class SeriesRecorder extends IPSModule
         $this->RegisterPropertyString('Bedingungen', '[]');       // Serie + Feld + Vergleich + Wert
         $this->RegisterPropertyString('Staffeltabelle', '[]');    // Serie + von + nach
 
+        // Der Weg zum Receiver fuehrt ueber das Modul EnigmaReceiver, nicht ueber
+        // eine eigene Verbindung. Dort sitzt das Gate, dort stehen Vor- und
+        // Nachlauf JE RECEIVER, und dort ist die Positivliste der Endpunkte.
+        // Zwei Absender auf demselben Geraet waeren ein Rezept fuer doppelte
+        // Aufnahmen - deshalb genau einer.
+        $this->RegisterPropertyInteger('ErInstanz', 0);
+        $this->RegisterPropertyInteger('IntervallProgramm', 0);   // Minuten, 0 = kein Timer
+
         $this->RegisterTimer(self::TIMER_LAUF, 0, 'SR_Analyse($_IPS[\'TARGET\']);');
         $this->RegisterTimer(self::TIMER_BEZUG, 0, 'SR_HoleProgramm($_IPS[\'TARGET\']);');
         $this->RegisterTimer(self::TIMER_WUNSCH, 0, 'SR_HoleWunschliste($_IPS[\'TARGET\']);');
         $this->RegisterTimer(self::TIMER_SCAN, 0, 'SR_ScanneBestand($_IPS[\'TARGET\']);');
         $this->RegisterTimer(self::TIMER_DUP, 0, 'SR_PruefeDuplikate($_IPS[\'TARGET\']);');
+        $this->RegisterTimer(self::TIMER_PROG, 0, 'SR_Programmiere($_IPS[\'TARGET\']);');
     }
 
     public function ApplyChanges(): void
@@ -157,6 +167,8 @@ class SeriesRecorder extends IPSModule
         $this->RegisterVariableString('Duplikate', 'Duplikate geprueft', '', 120);
         $this->RegisterVariableString('DuplikateListe', 'Duplikate (JSON)', '', 130);
         $this->RegisterVariableString('Serien', 'Serien (JSON)', '', 140);
+        $this->RegisterVariableString('Programmierung', 'Programmierung', '', 150);
+        $this->RegisterVariableString('ProgrammListe', 'Programmierung (JSON)', '', 160);
 
         $an = $this->ReadPropertyBoolean('Aktiv');
         $this->SetTimerInterval(self::TIMER_LAUF,
@@ -169,6 +181,8 @@ class SeriesRecorder extends IPSModule
             ($an ? max(0, $this->ReadPropertyInteger('IntervallScan')) : 0) * 60 * 1000);
         $this->SetTimerInterval(self::TIMER_DUP,
             ($an ? max(0, $this->ReadPropertyInteger('IntervallDuplikate')) : 0) * 60 * 1000);
+        $this->SetTimerInterval(self::TIMER_PROG,
+            ($an ? max(0, $this->ReadPropertyInteger('IntervallProgramm')) : 0) * 60 * 1000);
 
         $fehlt = $this->fehlendeDateien();
         if ($fehlt !== []) {
@@ -182,6 +196,9 @@ class SeriesRecorder extends IPSModule
     // ==================================================================
     // Oeffentliche Funktionen
     // ==================================================================
+
+    /** @var array<string,mixed>|null Rohergebnis des letzten Laufs in DIESEM Prozess */
+    private ?array $letzterLauf = null;
 
     /** Lesender Durchlauf. Ergebnis steht in den Variablen; nichts wird geschaltet. */
     public function Analyse(): string
@@ -222,7 +239,114 @@ class SeriesRecorder extends IPSModule
             $this->ReadPropertyBoolean('Armed') ? '' : ' (nur lesend)'));
         $this->SendDebug('SR.quelle', 'gelesen aus ' . basename($quelle), 0);
 
+        // Fuer die Programmierung im selben Durchlauf: sie braucht Kanalnamen und
+        // Sekunden, die Anzeigetabelle hat nur Datum und Uhrzeit.
+        $this->letzterLauf = $e;
+
         return json_encode(['ok' => true] + $e['kennzahlen'] + ['dauerMs' => $e['dauerMs']], JSON_UNESCAPED_UNICODE);
+    }
+
+    /**
+     * Aufnahmen programmieren - ueber das Modul EnigmaReceiver.
+     *
+     * Das ist der Schritt, der den Serienrecorder vom Beobachter zum Betreiber
+     * macht. Er geht bewusst NICHT selbst an die Box:
+     *
+     *  - Vor- und Nachlauf gehoeren dem Receiver. Jede Box hat eigene Werte
+     *    (Anlaufzeit des Tuners, Umschaltdauer), und ER_PlaneAufnahme rechnet sie
+     *    aus IHRER Instanz dazu. Genau deshalb schickt diese Stelle die
+     *    ROHEN Sendezeiten - wer hier schon rechnet, rechnet doppelt.
+     *  - Die verbindlichen Zeiten kommen aus dem EPG der Box, nicht aus XMLTV.
+     *    Das erledigt ER_PlaneAufnahme ueber seine eigene Suche.
+     *  - Das Gate sitzt dort. Diese Funktion hat ein zweites (Armed): erst wenn
+     *    BEIDE offen sind, wird geschrieben. Ist eines zu, entsteht eine Liste
+     *    mit dem, was passiert waere.
+     *
+     * Der Timername folgt dem Altsystem Zeichen fuer Zeichen
+     * ("Serie - S01E02 - Episodentitel"): an ihm haengen der Bestandsscan und
+     * die Duplikaterkennung. Ein anderer Name hiesse, dass jede Aufnahme als neu
+     * gilt und beim naechsten Lauf noch einmal programmiert wird.
+     */
+    public function Programmiere(): string
+    {
+        if (!$this->ReadPropertyBoolean('Aktiv')) {
+            return json_encode(['ok' => false, 'grund' => 'nicht aktiv']);
+        }
+        $er = $this->ReadPropertyInteger('ErInstanz');
+        if ($er <= 0 || !@IPS_InstanceExists($er)) {
+            $this->SetValue('Programmierung', date('d.m. H:i') . ' · keine Receiver-Instanz gewaehlt');
+            return json_encode(['ok' => false, 'grund' => 'keine Receiver-Instanz gewaehlt']);
+        }
+        if (!function_exists('ER_PlaneAufnahme') || !function_exists('ER_FuehreAus')) {
+            $this->SetValue('Programmierung', date('d.m. H:i') . ' · Modul EnigmaReceiver nicht geladen');
+            return json_encode(['ok' => false, 'grund' => 'ER-Funktionen fehlen']);
+        }
+
+        $roh = $this->Analyse();                       // frischer Lauf; Urteile stehen danach in den Variablen
+        $kz  = json_decode($roh, true);
+        if (empty($kz['ok'])) {
+            return $roh;
+        }
+        $sendungen = $this->letzteSendungen();
+        if ($sendungen === []) {
+            $this->SetValue('Programmierung', date('d.m. H:i') . ' · nichts zu programmieren');
+            return json_encode(['ok' => true, 'programmiert' => 0, 'hinweis' => 'keine Sendungen']);
+        }
+        $scharf = $this->ReadPropertyBoolean('Armed');
+
+        $gesetzt = 0; $schon = 0; $konflikt = 0; $fehler = 0; $vorschlag = 0;
+        $zeilen = [['Datum', 'Zeit', 'Serie', 'Folge', 'Sender', 'Ergebnis', 'Meldung']];
+        foreach ($sendungen as $x) {
+            if (($x['urteil'] ?? '') !== 'aufnehmen') {
+                continue;
+            }
+            $auftrag = [
+                'sender' => (string) $x['kanal'],      // Kanalname der Box; ER loest ihn zur Referenz auf
+                'start'  => (int) $x['start'],         // ROHE Sendezeit - Vor-/Nachlauf legt der Receiver dazu
+                'ende'   => (int) $x['ende'],
+                'titel'  => $this->timername($x),
+                'kurz'   => (string) ($x['titel'] ?? ''),
+            ];
+            $v = json_decode(ER_PlaneAufnahme($er, json_encode($auftrag)), true);
+            $zeile = [date('d.m.', (int) $x['start']), date('H:i', (int) $x['start']),
+                      (string) $x['serie'], (string) ($x['staffelFolge'] ?? ''), (string) $x['sender']];
+
+            if (empty($v['ok'])) {
+                $fehler++;
+                $zeilen[] = array_merge($zeile, ['Fehler', (string) ($v['fehler'] ?? 'unbekannt')]);
+                continue;
+            }
+            if (!empty($v['schonDa'])) {
+                $schon++;
+                $zeilen[] = array_merge($zeile, ['steht schon', (string) $v['lesbar']]);
+                continue;
+            }
+            if (!$scharf || empty($v['scharf'])) {
+                $vorschlag++;
+                $zeilen[] = array_merge($zeile, ['Vorschlag', (string) $v['lesbar'] . ' · ' . (string) $v['hinweis']]);
+                continue;
+            }
+            $a = json_decode(ER_FuehreAus($er, json_encode($v['vorschlag'])), true);
+            if (!empty($a['ok'])) {
+                $gesetzt++;
+                $zeilen[] = array_merge($zeile, ['programmiert', (string) $v['lesbar']]);
+            } elseif (!empty($a['konflikte'])) {
+                $konflikt++;
+                $zeilen[] = array_merge($zeile, ['Konflikt', implode(' / ', (array) $a['konflikte'])]);
+            } else {
+                $fehler++;
+                $zeilen[] = array_merge($zeile, ['abgelehnt', (string) ($a['fehler'] ?? 'unbekannt')]);
+            }
+        }
+
+        $this->SetValue('ProgrammListe', (string) json_encode($zeilen, JSON_UNESCAPED_UNICODE));
+        $text = sprintf('%s · %d programmiert, %d standen schon, %d Vorschlaege, %d Konflikte, %d Fehler%s',
+            date('d.m. H:i'), $gesetzt, $schon, $vorschlag, $konflikt, $fehler,
+            $scharf ? '' : ' (nicht scharf)');
+        $this->SetValue('Programmierung', $text);
+        return json_encode(['ok' => true, 'programmiert' => $gesetzt, 'schonDa' => $schon,
+                            'vorschlaege' => $vorschlag, 'konflikte' => $konflikt, 'fehler' => $fehler,
+                            'scharf' => $scharf], JSON_UNESCAPED_UNICODE);
     }
 
     /**
@@ -789,7 +913,10 @@ class SeriesRecorder extends IPSModule
         return json_encode([
             'elements' => [
                 ['type' => 'CheckBox', 'name' => 'Aktiv', 'caption' => 'Aktiv'],
-                ['type' => 'CheckBox', 'name' => 'Armed', 'caption' => 'Scharf (schaltet Timer am Receiver - in diesem Stand ohne Wirkung)'],
+                ['type' => 'CheckBox', 'name' => 'Armed', 'caption' => 'Scharf (programmiert Aufnahmen am Receiver)'],
+                ['type' => 'SelectInstance', 'name' => 'ErInstanz', 'caption' => 'Receiver-Instanz (EnigmaReceiver)'],
+                ['type' => 'Label', 'caption' => 'Vor- und Nachlauf kommen aus DIESER Receiver-Instanz - je Box eigene Werte. Der Serienrecorder schickt die rohen Sendezeiten.'],
+                ['type' => 'NumberSpinner', 'name' => 'IntervallProgramm', 'caption' => 'Programmieren alle ... Minuten (0 = aus)', 'minimum' => 0, 'maximum' => 1440],
                 ['type' => 'Label', 'caption' => '— Zeitsteuerung: 0 schaltet die jeweilige Aufgabe ab —'],
                 ['type' => 'NumberSpinner', 'name' => 'Intervall', 'caption' => 'Zuordnen und bewerten (Minuten)', 'minimum' => 0, 'maximum' => 10080],
                 ['type' => 'NumberSpinner', 'name' => 'IntervallBezug', 'caption' => 'Programmvorschau holen (Minuten)', 'minimum' => 0, 'maximum' => 10080],
@@ -807,10 +934,13 @@ class SeriesRecorder extends IPSModule
                 ['type' => 'ValidationTextBox', 'name' => 'ReceiverBouquet', 'caption' => 'Bouquet (optional)'],
                 ['type' => 'NumberSpinner', 'name' => 'ReceiverTuner', 'caption' => 'Verfuegbare Tuner', 'minimum' => 1, 'maximum' => 64],
                 ['type' => 'ValidationTextBox', 'name' => 'ReceiverAufnahmepfad', 'caption' => 'Aufnahmepfad auf dem Receiver'],
-                ['type' => 'RowLayout', 'items' => [
-                    ['type' => 'NumberSpinner', 'name' => 'Vorlauf', 'caption' => 'Vorlauf (Minuten)', 'minimum' => 0, 'maximum' => 60],
-                    ['type' => 'NumberSpinner', 'name' => 'Nachlauf', 'caption' => 'Nachlauf (Minuten)', 'minimum' => 0, 'maximum' => 120],
-                ]],
+                // Vor- und Nachlauf stehen bewusst NICHT hier. Sie gehoeren dem
+                // Receiver: jede Box hat eigene Anlauf- und Umschaltzeiten, und
+                // ER_PlaneAufnahme rechnet sie aus ihrer Instanz dazu. Zwei
+                // Stellen fuer denselben Wert hiessen frueher oder spaeter, dass
+                // er zweimal draufkommt - im Altsystem waren die beiden Felder
+                // ueberdies vertauscht (preRecord bekam die Nachlaufvariable).
+                ['type' => 'Label', 'caption' => 'Vor- und Nachlauf: siehe Receiver-Instanz oben - je Box eigene Werte.'],
                 ['type' => 'ExpansionPanel', 'caption' => 'Zugang zur Wunschliste', 'items' => [
                     ['type' => 'ValidationTextBox', 'name' => 'WunschBenutzer', 'caption' => 'Benutzer'],
                     ['type' => 'PasswordTextBox', 'name' => 'WunschPasswort', 'caption' => 'Passwort'],
@@ -1199,6 +1329,36 @@ class SeriesRecorder extends IPSModule
             ];
         }
         return (string) json_encode($zeilen, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    }
+
+    /** @return list<array<string,mixed>> Sendungen des letzten Laufs in diesem Prozess */
+    private function letzteSendungen(): array
+    {
+        return (array) ($this->letzterLauf['sendungen'] ?? []);
+    }
+
+    /**
+     * Timername wie im Altsystem: "Serie - S01E02 - Episodentitel".
+     *
+     * Zeichengenau uebernommen, und das mit Absicht: der Bestandsscan liest die
+     * Dateinamen auf der Platte, und die Duplikaterkennung vergleicht sie. Ein
+     * anderer Name hiesse, dass jede bereits aufgenommene Folge als fehlend gilt
+     * und in der naechsten Runde noch einmal programmiert wird.
+     *
+     * @param array<string,mixed> $s
+     */
+    private function timername(array $s): string
+    {
+        $nummer = strtoupper(trim((string) ($s['staffelFolge'] ?? '')));
+        $name = (string) $s['serie'];
+        if ($nummer !== '') {
+            $name .= ' - ' . $nummer;
+        }
+        $ep = trim((string) ($s['titel'] ?? ''));
+        if ($ep !== '' && $ep !== $name) {
+            $name .= ' - ' . $ep;
+        }
+        return $name;
     }
 
     private function staffelregeln(): Staffelregeln
