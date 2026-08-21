@@ -179,6 +179,12 @@ class SeriesRecorder extends IPSModule
         $this->RegisterVariableString('Matching', 'Matching (JSON)', '', 170);
         $this->RegisterVariableString('Protokoll', 'Protokoll (JSON)', '', 180);
         $this->RegisterVariableString('Kennzahlen', 'Kennzahlen (JSON)', '', 190);
+        // Zwei Zahlen aus dem Bestandsscan als eigene Variablen - nicht nur als
+        // Text. Nur so lassen sie sich aufzeichnen, und nur so kann die Historie
+        // des Altsystems ("Aufnahmen in der Datenbank", zwei Jahre) hier
+        // weiterlaufen statt bei null anzufangen.
+        $this->RegisterVariableInteger('BestandAufnahmen', 'Aufnahmen im Bestand', '', 200);
+        $this->RegisterVariableInteger('BestandSerien', 'Serien im Bestand', '', 210);
 
         $an = $this->ReadPropertyBoolean('Aktiv');
         $this->SetTimerInterval(self::TIMER_LAUF,
@@ -869,6 +875,13 @@ class SeriesRecorder extends IPSModule
         }
         $this->SetValue('Bestand', sprintf('%s · %s · %d Aufnahmen, %d Serien · %.1f s%s',
             date('d.m. H:i'), $e['meldung'], $e['dateien'], $e['serien'], $e['dauerMs'] / 1000, $nachgefasst));
+        // Nur bei einem gelungenen Scan schreiben: eine haengende Freigabe meldet
+        // null Dateien, und eine Null in einer aufgezeichneten Reihe sieht spaeter
+        // aus wie ein geleerter Bestand.
+        if (!empty($e['ok'])) {
+            $this->SetValue('BestandAufnahmen', (int) $e['dateien']);
+            $this->SetValue('BestandSerien', (int) $e['serien']);
+        }
         return json_encode($e, JSON_UNESCAPED_UNICODE);
     }
 
