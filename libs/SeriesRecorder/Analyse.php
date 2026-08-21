@@ -72,6 +72,7 @@ final class Analyse
         $urteiler?->beginneLauf();
 
         $treffer = [];
+        $fast = [];
         $z = ['geprueft' => 0, 'zugeordnet' => 0, 'ohne Favorit' => 0, 'Sender nicht empfangbar' => 0];
         $verworfeneSender = [];
 
@@ -80,6 +81,20 @@ final class Analyse
             $t = $resolver->bestimme($s['titel']);
             if ($t === null) {
                 $z['ohne Favorit']++;
+                // Fast-Treffer merken. Zwoelftausend nicht zugeordnete Titel sind
+                // keine Auskunft; die dreissig, die knapp an einem Favoriten
+                // vorbeigingen, sind eine. Untergrenze bewusst hoch angesetzt -
+                // darunter ist es Rauschen.
+                $f = $resolver->fastTreffer();
+                if ($f !== null && $f['punkte'] >= 30) {
+                    $k = $s['titel'] . '|' . $f['favorit'];
+                    if (!isset($fast[$k])) {
+                        $fast[$k] = ['titel' => $s['titel'], 'favorit' => $f['favorit'],
+                                     'punkte' => $f['punkte'], 'regel' => $f['regel'],
+                                     'sender' => $sender[$s['kanal']] ?? $s['kanal'], 'anzahl' => 0];
+                    }
+                    $fast[$k]['anzahl']++;
+                }
                 continue;
             }
             if (($kanal[$s['kanal']] ?? null) === null) {
@@ -131,8 +146,46 @@ final class Analyse
             'offeneSender' => $offen,
             'quellen'      => trim(($this->katalog?->bericht() ?? '')
                                 . ($this->receiver !== null ? ' | ' . $this->receiver->bericht() : '')),
+            'fastTreffer'  => self::sortiereFast($fast),
             'dauerMs'      => (int) round((microtime(true) - $t0) * 1000),
         ];
+    }
+
+    /**
+     * Fast-Treffer: die staerksten zuerst, dann die haeufigsten.
+     *
+     * @param array<string,array<string,mixed>> $fast
+     * @return list<array<string,mixed>>
+     */
+    private static function sortiereFast(array $fast): array
+    {
+        $l = array_values($fast);
+        usort($l, static fn(array $a, array $b): int =>
+            ($b['punkte'] <=> $a['punkte']) ?: ($b['anzahl'] <=> $a['anzahl']));
+        return array_slice($l, 0, 200);
+    }
+
+    /**
+     * Fast-Treffer als Tabelle (Zeile 0 = Kopf).
+     *
+     * @param list<array<string,mixed>> $fast
+     * @return list<list<string>>
+     */
+    public static function fastAlsTabelle(array $fast, int $schwelle): array
+    {
+        $out = [['XMLTV-Titel', 'naechster Favorit', 'Punkte', 'fehlt bis', 'Regel', 'Sender', 'Anzahl']];
+        foreach ($fast as $f) {
+            $out[] = [
+                (string) $f['titel'],
+                (string) $f['favorit'],
+                (string) $f['punkte'],
+                (string) max(0, $schwelle - (int) $f['punkte']),
+                (string) $f['regel'],
+                (string) $f['sender'],
+                (string) $f['anzahl'],
+            ];
+        }
+        return $out;
     }
 
     /**
