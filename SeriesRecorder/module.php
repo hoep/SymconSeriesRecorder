@@ -236,7 +236,26 @@ class SeriesRecorder extends IPSModule
      */
     public function Serienuebersicht(): string
     {
-        return $this->serientabelle(null);
+        // Die Zaehlspalten aus dem LETZTEN Lauf uebernehmen, statt sie leer zu
+        // lassen: die Uebersicht wird zwischen zwei Laeufen gelesen, und "keine
+        // Ausstrahlung" waere dort eine falsche Aussage statt einer fehlenden.
+        $tab = json_decode($this->GetValue('Ausstrahlungen'), true);
+        $sendungen = [];
+        if (is_array($tab) && count($tab) > 1) {
+            $kopf = array_flip(array_map('strval', $tab[0]));
+            $iSerie = $kopf['Serie'] ?? null;
+            $iFolge = $kopf['Folge'] ?? null;
+            foreach (array_slice($tab, 1) as $z) {
+                if ($iSerie === null || !isset($z[$iSerie])) {
+                    continue;
+                }
+                $sendungen[] = [
+                    'serie'        => (string) $z[$iSerie],
+                    'staffelFolge' => $iFolge !== null ? (string) ($z[$iFolge] ?? '') : '',
+                ];
+            }
+        }
+        return $this->serientabelle($sendungen);
     }
 
     /** Diagnose: welchem Favoriten wuerde dieser Titel zugeordnet? */
@@ -1153,7 +1172,8 @@ class SeriesRecorder extends IPSModule
                 continue;
             }
             $anzahl[$serie] = ($anzahl[$serie] ?? 0) + 1;
-            if (trim((string) ($x['staffelFolge'] ?? '')) === '' || str_starts_with((string) $x['staffelFolge'], 'S00')) {
+            $nr = strtoupper(trim((string) ($x['staffelFolge'] ?? '')));
+            if ($nr === '' || str_starts_with($nr, 'S00')) {
                 $ohne[$serie] = ($ohne[$serie] ?? 0) + 1;
             }
         }
