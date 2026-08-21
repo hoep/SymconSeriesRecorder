@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Hoep\SeriesRecorder;
 
 require_once __DIR__ . '/Bestand.php';
+require_once __DIR__ . '/Staffelregeln.php';
 require_once __DIR__ . '/EpisodenNummer.php';
 require_once __DIR__ . '/Bedingungen.php';
 require_once __DIR__ . '/Episodenkatalog.php';
@@ -48,6 +49,7 @@ final class Entscheidung
         private ?Bedingungen $bedingungen = null,
         private ?EpisodenQuelle $katalog = null,
         private ?Receiver $receiver = null,
+        private ?Staffelregeln $staffelregeln = null,
     ) {
     }
 
@@ -86,6 +88,21 @@ final class Entscheidung
                 $st = $k['staffel'];
                 $fo = $k['folge'];
                 $quelle = 'katalog';
+            }
+        }
+
+        // Staffel berichtigen, BEVOR irgendetwas verglichen wird.
+        //
+        // Die Reihenfolge ist der ganze Punkt: der Bestand auf der Platte liegt
+        // unter der berichtigten Nummer ("Season 1"), die Serien-Schranken rechnen
+        // mit ihr, und der Timer traegt sie spaeter im Namen. Wer erst entscheidet
+        // und dann berichtigt, sucht S00E04 im Bestand und findet die laengst
+        // aufgenommene S01E04 nicht - und nimmt sie ein zweites Mal auf.
+        if ($this->staffelregeln !== null) {
+            $neu = $this->staffelregeln->fuer($serie, $st);
+            if ($neu !== null) {
+                $st = $neu;
+                $quelle = ($quelle === '' ? 'staffelregel' : $quelle . '+staffelregel');
             }
         }
 
