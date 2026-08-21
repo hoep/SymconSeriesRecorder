@@ -81,19 +81,16 @@ final class Analyse
             $t = $resolver->bestimme($s['titel']);
             if ($t === null) {
                 $z['ohne Favorit']++;
-                // Fast-Treffer merken. Zwoelftausend nicht zugeordnete Titel sind
-                // keine Auskunft; die dreissig, die knapp an einem Favoriten
-                // vorbeigingen, sind eine. Untergrenze bewusst hoch angesetzt -
-                // darunter ist es Rauschen.
-                $f = $resolver->fastTreffer();
-                if ($f !== null && $f['punkte'] >= 30) {
-                    $k = $s['titel'] . '|' . $f['favorit'];
-                    if (!isset($fast[$k])) {
-                        $fast[$k] = ['titel' => $s['titel'], 'favorit' => $f['favorit'],
-                                     'punkte' => $f['punkte'], 'regel' => $f['regel'],
-                                     'sender' => $sender[$s['kanal']] ?? $s['kanal'], 'anzahl' => 0];
+                // Unzugeordnete Titel sammeln - nach BASISNAMEN, nicht je
+                // Ausstrahlung. Zwoelftausend Zeilen sind keine Auskunft; die
+                // paar hundert verschiedenen Namen dahinter sind eine.
+                [$b, ] = TitelResolver::zerlege($s['titel']);
+                $b = trim($b);
+                if ($b !== '') {
+                    if (!isset($fast[$b])) {
+                        $fast[$b] = ['titel' => $b, 'sender' => $sender[$s['kanal']] ?? $s['kanal'], 'anzahl' => 0];
                     }
-                    $fast[$k]['anzahl']++;
+                    $fast[$b]['anzahl']++;
                 }
                 continue;
             }
@@ -146,23 +143,86 @@ final class Analyse
             'offeneSender' => $offen,
             'quellen'      => trim(($this->katalog?->bericht() ?? '')
                                 . ($this->receiver !== null ? ' | ' . $this->receiver->bericht() : '')),
-            'fastTreffer'  => self::sortiereFast($fast),
+            'fastTreffer'  => self::naheDran($fast, $this->favoriten),
             'dauerMs'      => (int) round((microtime(true) - $t0) * 1000),
         ];
     }
 
     /**
-     * Fast-Treffer: die staerksten zuerst, dann die haeufigsten.
+     * Welcher Favorit liegt einem nicht zugeordneten Titel am naechsten?
+     *
+     * Die Punktevergabe des Resolvers taugt dafuer nicht: unterhalb ihrer
+     * Schwelle liegt nichts: entweder eine Regel trifft (mindestens 55 Punkte)
+     * oder gar nichts. Ein "knapp daneben" gibt es dort nicht - deshalb blieb
+     * die Matching-Seite leer.
+     *
+     * Hier wird deshalb wirklich verglichen: Editierabstand auf der
+     * Vergleichsform, in Prozent der Namenslaenge. Gerechnet wird nur ueber die
+     * verschiedenen BASISNAMEN (ein paar hundert statt zwoelftausend Zeilen) und
+     * nur gegen Favoriten aehnlicher Laenge - sonst waere es eine Million
+     * Vergleiche fuer nichts.
      *
      * @param array<string,array<string,mixed>> $fast
+     * @param list<string> $favoriten
      * @return list<array<string,mixed>>
      */
-    private static function sortiereFast(array $fast): array
+    private static function naheDran(array $fast, array $favoriten): array
     {
-        $l = array_values($fast);
-        usort($l, static fn(array $a, array $b): int =>
-            ($b['punkte'] <=> $a['punkte']) ?: ($b['anzahl'] <=> $a['anzahl']));
-        return array_slice($l, 0, 200);
+        // Haeufigste zuerst - wer oft laeuft, faellt auch oft auf.
+        uasort($fast, static fn(array $a, array $b): int => $b['anzahl'] <=> $a['anzahl']);
+        $fast = array_slice($fast, 0, 600, true);
+
+        $favNorm = [];
+        foreach ($favoriten as $f) {
+            $n = TitelResolver::normalisiere($f);
+            if ($n !== '') {
+                $favNorm[$f] = $n;
+            }
+        }
+
+        $out = [];
+        foreach ($fast as $e) {
+            $n = TitelResolver::normalisiere((string) $e['titel']);
+            if ($n === '' || mb_strlen($n) < 4) {
+                continue;
+            }
+            $besterName = ''; $besteNaehe = 0; $bestesVorn = false;
+            foreach ($favNorm as $name => $fn) {
+                // Laengenfenster: was sich um mehr als ein Drittel unterscheidet,
+                // ist kein Schreibfehler mehr.
+                $la = strlen($n); $lb = strlen($fn);
+                if ($lb < $la * 0.66 || $lb > $la * 1.5) {
+                    continue;
+                }
+                $d = levenshtein($n, $fn);
+                $naehe = (int) round((1 - $d / max($la, $lb)) * 100);
+                // Steckt der kuerzere Name vorn im laengeren, ist das ein starkes
+                // Zeichen: "Magnum" gegen "Magnum P.I.". Reine Zeichenaehnlichkeit
+                // wuerde auch "Wetter" und "Dexter" zusammenbringen - beides sechs
+                // Buchstaben, zwei Unterschiede, und nichts miteinander zu tun.
+                $vorn = str_starts_with($fn, $n) || str_starts_with($n, $fn);
+                if ($vorn) {
+                    $naehe = max($naehe, 72);
+                }
+                if ($naehe > $besteNaehe) {
+                    $besteNaehe = $naehe;
+                    $besterName = $name;
+                    $bestesVorn = $vorn;
+                }
+            }
+            // 72 Prozent ist die Grenze, an der aus Zufall Absicht wird. Darunter
+            // stand im Versuch nur Rauschen ("Kommissar Rex" gegen "Kommissar
+            // Cain", "Inspector Barnaby" gegen "Inspektor Jury").
+            if ($besterName === '' || $besteNaehe < 72) {
+                continue;
+            }
+            $out[] = ['titel' => (string) $e['titel'], 'favorit' => $besterName,
+                      'naehe' => $besteNaehe, 'sender' => (string) $e['sender'],
+                      'anzahl' => (int) $e['anzahl']];
+        }
+        usort($out, static fn(array $a, array $b): int =>
+            ($b['naehe'] <=> $a['naehe']) ?: ($b['anzahl'] <=> $a['anzahl']));
+        return array_slice($out, 0, 200);
     }
 
     /**
@@ -173,14 +233,12 @@ final class Analyse
      */
     public static function fastAlsTabelle(array $fast, int $schwelle): array
     {
-        $out = [['XMLTV-Titel', 'naechster Favorit', 'Punkte', 'fehlt bis', 'Regel', 'Sender', 'Anzahl']];
+        $out = [['XMLTV-Titel', 'naechster Favorit', 'Naehe', 'Sender', 'Ausstrahlungen']];
         foreach ($fast as $f) {
             $out[] = [
                 (string) $f['titel'],
                 (string) $f['favorit'],
-                (string) $f['punkte'],
-                (string) max(0, $schwelle - (int) $f['punkte']),
-                (string) $f['regel'],
+                ((int) $f['naehe']) . ' %',
                 (string) $f['sender'],
                 (string) $f['anzahl'],
             ];
