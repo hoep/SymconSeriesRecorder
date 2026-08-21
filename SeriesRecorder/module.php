@@ -1349,11 +1349,14 @@ class SeriesRecorder extends IPSModule
      */
     private function timername(array $s): string
     {
+        // Auch ohne bekannte Nummer steht SxxExx im Namen - das Altsystem schreibt
+        // dann S00E00, und die Aufnahmen auf der Platte tragen es so. Wer die
+        // Stelle hier weglaesst, erzeugt zwei Namensformen in derselben Ablage.
         $nummer = strtoupper(trim((string) ($s['staffelFolge'] ?? '')));
-        $name = (string) $s['serie'];
-        if ($nummer !== '') {
-            $name .= ' - ' . $nummer;
+        if ($nummer === '') {
+            $nummer = 'S00E00';
         }
+        $name = (string) $s['serie'] . ' - ' . $nummer;
         $ep = trim((string) ($s['titel'] ?? ''));
         if ($ep !== '' && $ep !== $name) {
             $name .= ' - ' . $ep;
