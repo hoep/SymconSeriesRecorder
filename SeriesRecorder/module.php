@@ -65,6 +65,13 @@ class SeriesRecorder extends IPSModule
 
         $this->RegisterPropertyBoolean('Aktiv', true);
         $this->RegisterPropertyBoolean('Armed', false);
+        // Loeschen ist ein EIGENES Gate.
+        //
+        // "Scharf" heisst: Aufnahmen programmieren. Dass damit zugleich Dateien
+        // von der Platte verschwinden duerfen, waere eine Ueberraschung - und im
+        // Zweifel eine teure: die Duplikatliste umfasste bei der ersten Messung
+        // rund 30 GB. Wer loeschen will, sagt es hier ausdruecklich.
+        $this->RegisterPropertyBoolean('LoeschenScharf', false);
         $this->RegisterPropertyInteger('Intervall', 60);          // Minuten, 0 = kein Timer
         $this->RegisterPropertyInteger('IntervallBezug', 0);      // Programmvorschau holen
         $this->RegisterPropertyString('XmltvUrl', '');
@@ -422,7 +429,7 @@ class SeriesRecorder extends IPSModule
         $e = $this->aktualisiereDuplikatliste();
         $d = new Duplikate($this->bestandsdatei());
 
-        $scharf = $this->ReadPropertyBoolean('Armed');
+        $scharf = $this->ReadPropertyBoolean('LoeschenScharf');
         $ergebnis = null;
         if ($scharf && $e['ueberfluessig'] > 0 && ($e['verlaesslich'] ?? true)) {
             $weg = [];
@@ -914,6 +921,7 @@ class SeriesRecorder extends IPSModule
             'elements' => [
                 ['type' => 'CheckBox', 'name' => 'Aktiv', 'caption' => 'Aktiv'],
                 ['type' => 'CheckBox', 'name' => 'Armed', 'caption' => 'Scharf (programmiert Aufnahmen am Receiver)'],
+                ['type' => 'CheckBox', 'name' => 'LoeschenScharf', 'caption' => 'Duplikate wirklich loeschen (eigenes Gate - sonst nur Vorschlag)'],
                 ['type' => 'SelectInstance', 'name' => 'ErInstanz', 'caption' => 'Receiver-Instanz (EnigmaReceiver)'],
                 ['type' => 'Label', 'caption' => 'Vor- und Nachlauf kommen aus DIESER Receiver-Instanz - je Box eigene Werte. Der Serienrecorder schickt die rohen Sendezeiten.'],
                 ['type' => 'NumberSpinner', 'name' => 'IntervallProgramm', 'caption' => 'Programmieren alle ... Minuten (0 = aus)', 'minimum' => 0, 'maximum' => 1440],
