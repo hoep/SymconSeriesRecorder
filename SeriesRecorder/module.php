@@ -266,7 +266,11 @@ class SeriesRecorder extends IPSModule
         $this->SetValue('Ausgeschlossen', (int) ($e['kennzahlen']['ausgeschlossen'] ?? 0));
         $this->SetValue('Dauer', $e['dauerMs']);
         $this->SetValue('LetzterLauf', time());
-        $this->SetValue('Ausstrahlungen', json_encode(Analyse::alsTabelle($e['sendungen']), JSON_UNESCAPED_UNICODE));
+        $karte = $this->piconKarte();
+        $this->SetValue('Ausstrahlungen', json_encode(
+            Analyse::alsTabelle($e['sendungen'], fn(array $s): string => $this->senderZelle(
+                $karte, (string) ($s['kanal'] ?? ''), (string) ($s['sender'] ?? ''))),
+            JSON_UNESCAPED_UNICODE));
         $this->SetValue('OffeneSender', implode("\n", $e['offeneSender']));
         $this->SetValue('Serien', $this->serientabelle($e['sendungen']));
         $this->SetValue('Matching', (string) json_encode(
@@ -338,6 +342,7 @@ class SeriesRecorder extends IPSModule
         }
         $scharf = $this->ReadPropertyBoolean('Armed');
 
+        $karte = $this->piconKarte();
         $gesetzt = 0; $schon = 0; $konflikt = 0; $fehler = 0; $vorschlag = 0;
         $zeilen = [['Datum', 'Zeit', 'Serie', 'Folge', 'Sender', 'Ergebnis', 'Meldung']];
         foreach ($sendungen as $x) {
@@ -361,7 +366,8 @@ class SeriesRecorder extends IPSModule
             }
             $v = json_decode(ER_PlaneAufnahme($er, json_encode($auftrag)), true);
             $zeile = [date('d.m.', (int) $x['start']), date('H:i', (int) $x['start']),
-                      (string) $x['serie'], (string) ($x['staffelFolge'] ?? ''), (string) $x['sender']];
+                      (string) $x['serie'], (string) ($x['staffelFolge'] ?? ''),
+                      $this->senderZelle($karte, (string) ($x['kanal'] ?? ''), (string) $x['sender'])];
 
             if (empty($v['ok'])) {
                 $fehler++;
@@ -1294,6 +1300,73 @@ class SeriesRecorder extends IPSModule
         if (@mkdir($ziel, 0777, true)) {
             $this->LogMessage('Aufnahmeordner angelegt: ' . $ziel, KL_MESSAGE);
         }
+    }
+
+    /**
+     * Kanalname der Box -> Dateiname des Senderlogos.
+     *
+     * Die Logos liegen bei Symcon (rund 2.900 Stueck) und werden unter /tile/
+     * ausgeliefert. BEWUSST von dort und nicht von der Box: eine Tabelle mit 200
+     * Zeilen waeren sonst 200 Abrufe an ein Geraet, das nebenher fernsieht.
+     *
+     * Der Dateiname ist die Serviceref, Doppelpunkte zu Unterstrichen, nur die
+     * ersten zehn Felder. Was dahinter steht (Streaming-Adressen), ergibt keinen
+     * Dateinamen.
+     *
+     * @return array<string,string> Kleinschreibung des Namens => Dateiname
+     */
+    private function piconKarte(): array
+    {
+        $er = $this->ReadPropertyInteger('ErInstanz');
+        if ($er <= 0 || !function_exists('ER_Sender')) {
+            return [];
+        }
+        $j = json_decode(ER_Sender($er), true);
+        if (empty($j['ok'])) {
+            return [];
+        }
+        $ordner = rtrim(IPS_GetKernelDir(), '/') . '/webfront/user/img/picons/';
+        $out = [];
+        foreach ((array) ($j['sender'] ?? []) as $x) {
+            $name = trim((string) ($x['name'] ?? ''));
+            $felder = explode(':', trim((string) ($x['ref'] ?? '')));
+            if ($name === '' || count($felder) < 10) {
+                continue;
+            }
+            $datei = strtoupper(implode('_', array_slice($felder, 0, 10)));
+            if (preg_match('/^[0-9A-Z_]+$/', $datei) !== 1) {
+                continue;
+            }
+            // Nur was wirklich daliegt. Ein Verweis ins Leere waere ein kaputtes
+            // Bild in jeder Zeile - schlechter als der blosse Name.
+            if (is_file($ordner . $datei . '.png')) {
+                $out[mb_strtolower($name, 'UTF-8')] = $datei . '.png';
+            }
+        }
+        return $out;
+    }
+
+    /**
+     * Die Senderspalte einer Tabelle.
+     *
+     * Gesucht wird ueber den Kanalnamen der BOX, angezeigt wird der Name aus dem
+     * Programm - beides steckt im Bild: der eine als Titel, der andere als
+     * Alternativtext. Das ist nicht nur Hoeflichkeit gegenueber Vorlesegeraeten,
+     * sondern noetig fuer die Suche der Tabelle: sie sucht im Zellentext, und der
+     * ist hier das Bild.
+     *
+     * @param array<string,string> $karte
+     */
+    private function senderZelle(array $karte, string $kanal, string $anzeige): string
+    {
+        $datei = $karte[mb_strtolower(trim($kanal), 'UTF-8')] ?? '';
+        if ($datei === '') {
+            return $anzeige;
+        }
+        return '<img src="/tile/picons/' . $datei . '"'
+            . ' alt="' . htmlspecialchars($anzeige, ENT_QUOTES) . '"'
+            . ' title="' . htmlspecialchars($kanal, ENT_QUOTES) . '"'
+            . ' style="height:1.6em;vertical-align:middle">';
     }
 
     private function pfad(string $property): string

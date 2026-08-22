@@ -249,10 +249,12 @@ final class Analyse
     /**
      * Ergebnis als Zeilen-Array fuer die Tabellen-Variable (Zeile 0 = Kopf).
      *
-     * @param list<array<string,mixed>> $sendungen
+     * @param list<array<string,mixed>>          $sendungen
+     * @param (callable(array<string,mixed>):string)|null $senderZelle Baut die
+     *        Senderspalte; ohne sie steht dort der blosse Name.
      * @return list<list<string>>
      */
-    public static function alsTabelle(array $sendungen): array
+    public static function alsTabelle(array $sendungen, ?callable $senderZelle = null): array
     {
         $out = [['_ts', 'Datum', 'Start', 'Ende', 'Serie', 'Folge', 'Titel', 'Sender', 'Urteil', 'Grund']];
         foreach ($sendungen as $s) {
@@ -264,7 +266,12 @@ final class Analyse
                 (string) $s['serie'],
                 (string) ($s['staffelFolge'] ?? ''),
                 (string) $s['titel'],
-                (string) $s['sender'],
+                // Der Sender darf ein Bild sein - das Altsystem hat hier das
+                // Senderlogo gezeigt, und ohne es sieht die Tabelle nackt aus.
+                // Wer keins liefert, bekommt weiter den Namen; die Spaltenzahl
+                // bleibt gleich, denn die Seiten stellen Breite, Ausrichtung und
+                // Suche ueber die POSITION ein.
+                $senderZelle ? (string) $senderZelle($s) : (string) $s['sender'],
                 (string) ($s['urteil'] ?? ''),
                 (string) ($s['grund'] ?? ''),
             ];
