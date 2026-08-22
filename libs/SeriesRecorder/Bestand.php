@@ -105,12 +105,12 @@ final class Bestand
             $rest = [];
             foreach (array_slice($f, 2) as $feld) {
                 if ($nummer === '' && preg_match('/^\s*S\d{1,4}E\d{1,4}\s*$/i', (string) $feld)) {
-                    $nummer = mb_strtolower(trim((string) $feld), 'UTF-8');
+                    $nummer = self::nummerForm((string) $feld);
                 } else {
                     $rest[] = (string) $feld;
                 }
             }
-            if ($nummer !== '' && $nummer !== 's00e00') {
+            if ($nummer !== '' && $nummer !== 'S00E00') {
                 $this->nachNummer[$s . '|' . $nummer][] = $pfad;
             }
 
@@ -161,9 +161,27 @@ final class Bestand
         return array_keys($out);
     }
 
+    /**
+     * Die Folgennummer in EINER Schreibweise: S03E05, immer gross.
+     *
+     * Sie ist zugleich Anzeige und Vergleichsschluessel - und genau daran lag
+     * die alte Uneinheitlichkeit: als Schluessel wurde klein geschrieben, im
+     * Timernamen gross, und in der Tabelle stand mal so, mal so. Jetzt liefert
+     * diese Stelle die grosse Form, und jeder Vergleich schickt seinen Wert
+     * vorher durch dieselbe Funktion.
+     */
     public static function nummer(int $staffel, int $folge): string
     {
-        return sprintf('s%02de%02d', max(0, $staffel), max(0, $folge));
+        return sprintf('S%02dE%02d', max(0, $staffel), max(0, $folge));
+    }
+
+    /** Eine gelesene Nummer auf die kanonische Form bringen ("s3e5" -> "S03E05"). */
+    public static function nummerForm(string $roh): string
+    {
+        if (preg_match('/^\s*S(\d{1,4})E(\d{1,4})\s*$/i', trim($roh), $m)) {
+            return self::nummer((int) $m[1], (int) $m[2]);
+        }
+        return strtoupper(trim($roh));
     }
 
     /**
