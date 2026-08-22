@@ -1769,20 +1769,37 @@ class SeriesRecorder extends IPSModule
             return $url === '' ? '' : '<a href="' . $url . '" target="_blank" rel="noopener">' . $text . '</a>';
         };
 
-        $zeilen = [['Serie', 'Ausstrahlungen', 'ohne Staffel', 'Staffelregel', 'TheTVDB', 'TMDB']];
+        // Der Zustand ist eine KATEGORIE, keine Zahl - nur so lassen sich daraus
+        // Filterpillen bauen ("Staffel offen 3"). Die Zahl steht daneben in ihrer
+        // eigenen Spalte; stuende sie im Zustand, waere jede Zeile ein eigener
+        // Wert und die Pillenzeile so lang wie die Tabelle.
+        $zeilen = [['Serie', 'Ausstrahlungen', 'ohne Staffel', 'Zustand', 'Staffelregel', 'TheTVDB', 'TMDB']];
         $namen = $this->favoriten();
         sort($namen, SORT_NATURAL | SORT_FLAG_CASE);
         foreach ($namen as $serie) {
             $v = $verweise->fuer($serie);
             $s = Katalogverweise::suche($serie);
             $k = Bestand::form($serie);
+            $lauf = (int) ($anzahl[$serie] ?? 0);
+            $luecke = (int) ($ohne[$serie] ?? 0);
+            $regel = implode(', ', $regelText[$k] ?? []);
+            if ($lauf === 0) {
+                $zustand = 'ruht';                 // nichts im Programm - nichts zu tun
+            } elseif ($luecke > 0 && $regel === '') {
+                $zustand = 'Staffel offen';        // hier fehlt eine Regel
+            } elseif ($regel !== '') {
+                $zustand = 'Regel aktiv';
+            } else {
+                $zustand = 'vollständig';
+            }
             $zeilen[] = [
                 $serie,
-                (string) ($anzahl[$serie] ?? ''),
-                (string) ($ohne[$serie] ?? ''),
-                implode(', ', $regelText[$k] ?? []),
-                $v['tvdb'] !== '' ? $link($v['tvdb'], $v['tvdbName'] !== '' ? $v['tvdbName'] : 'öffnen') : $link($s['tvdb'], 'suchen'),
-                $v['tmdb'] !== '' ? $link($v['tmdb'], $v['tmdbName'] !== '' ? $v['tmdbName'] : 'öffnen') : $link($s['tmdb'], 'suchen'),
+                $lauf > 0 ? (string) $lauf : '',
+                $luecke > 0 ? (string) $luecke : '',
+                $zustand,
+                $regel,
+                $v['tvdb'] !== '' ? $link($v['tvdb'], $v['tvdbName'] !== '' ? $v['tvdbName'] : 'öffnen') : $link($s['tvdb'], 'nachschlagen'),
+                $v['tmdb'] !== '' ? $link($v['tmdb'], $v['tmdbName'] !== '' ? $v['tmdbName'] : 'öffnen') : $link($s['tmdb'], 'nachschlagen'),
             ];
         }
         return (string) json_encode($zeilen, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
