@@ -1327,7 +1327,7 @@ class SeriesRecorder extends IPSModule
         if (empty($j['ok'])) {
             return [];
         }
-        $ordner = rtrim(IPS_GetKernelDir(), '/') . '/webfront/user/img/picons/';
+        $ordner = self::PICONORDNER;
         $out = [];
         foreach ((array) ($j['sender'] ?? []) as $x) {
             $name = trim((string) ($x['name'] ?? ''));
@@ -1366,6 +1366,20 @@ class SeriesRecorder extends IPSModule
      * "ORF 1HD", "ORF1 HD" und "orf1hd" sind derselbe Sender - nur schreibt ihn
      * jede Quelle anders. Punkte gehoeren dazu ("SAT.1"), Bindestriche auch.
      */
+    /**
+     * Wo die Senderlogos LIEGEN.
+     *
+     * Nicht unter webfront/user/img/picons - dort sieht es zwar genauso aus, nur
+     * bedient die Adresse /tile/ diesen Ordner nicht. Sie zeigt auf das
+     * Programmverzeichnis, und ein Bild, das nur im falschen Ordner liegt, wird
+     * zur kaputten Grafik in jeder Zeile. Genau so ist es dem Logo von Comedy
+     * Central ergangen.
+     *
+     * ACHTUNG: das ist ein Programmverzeichnis. Eine Symcon-Aktualisierung kann
+     * selbst nachgelegte Bilder wieder entfernen.
+     */
+    private const PICONORDNER = '/usr/share/symcon/tile/picons/';
+
     private static function kanalForm(string $name): string
     {
         return preg_replace('/[^a-z0-9]+/', '', mb_strtolower(trim($name), 'UTF-8')) ?? '';
