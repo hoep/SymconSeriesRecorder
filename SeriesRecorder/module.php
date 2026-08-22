@@ -274,7 +274,9 @@ class SeriesRecorder extends IPSModule
         $this->SetValue('OffeneSender', implode("\n", $e['offeneSender']));
         $this->SetValue('Serien', $this->serientabelle($e['sendungen']));
         $this->SetValue('Matching', (string) json_encode(
-            Analyse::fastAlsTabelle((array) ($e['fastTreffer'] ?? []), TitelResolver::schwelle()),
+            Analyse::fastAlsTabelle((array) ($e['fastTreffer'] ?? []), TitelResolver::schwelle(),
+                fn(array $f): string => $this->senderZelle(
+                    $karte, (string) ($f['kanal'] ?? ''), (string) ($f['sender'] ?? ''))),
             JSON_UNESCAPED_UNICODE));
         $this->SetValue('Kennzahlen', $this->kennzahlentabelle($e));
         $this->SetValue('Protokoll', $this->protokolltabelle());

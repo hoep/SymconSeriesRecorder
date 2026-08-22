@@ -88,7 +88,10 @@ final class Analyse
                 $b = trim($b);
                 if ($b !== '') {
                     if (!isset($fast[$b])) {
-                        $fast[$b] = ['titel' => $b, 'sender' => $sender[$s['kanal']] ?? $s['kanal'], 'anzahl' => 0];
+                        // Der Kanal der BOX kommt mit, nicht nur der Anzeigename:
+                        // nur ueber ihn findet sich spaeter das Senderlogo.
+                        $fast[$b] = ['titel' => $b, 'sender' => $sender[$s['kanal']] ?? $s['kanal'],
+                                     'kanal' => (string) ($kanal[$s['kanal']] ?? ''), 'anzahl' => 0];
                     }
                     $fast[$b]['anzahl']++;
                 }
@@ -231,7 +234,7 @@ final class Analyse
      * @param list<array<string,mixed>> $fast
      * @return list<list<string>>
      */
-    public static function fastAlsTabelle(array $fast, int $schwelle): array
+    public static function fastAlsTabelle(array $fast, int $schwelle, ?callable $senderZelle = null): array
     {
         $out = [['XMLTV-Titel', 'naechster Favorit', 'Naehe', 'Sender', 'Ausstrahlungen']];
         foreach ($fast as $f) {
@@ -239,7 +242,7 @@ final class Analyse
                 (string) $f['titel'],
                 (string) $f['favorit'],
                 ((int) $f['naehe']) . ' %',
-                (string) $f['sender'],
+                $senderZelle ? (string) $senderZelle($f) : (string) $f['sender'],
                 (string) $f['anzahl'],
             ];
         }
