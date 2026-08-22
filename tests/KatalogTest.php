@@ -36,3 +36,23 @@ foreach ([['ohne Katalog',null],['mit Katalog',$k]] as [$was,$kat]) {
     printf("\n%-13s %s\n", $was.':', json_encode($stat,JSON_UNESCAPED_UNICODE));
     foreach(array_slice($tatort,0,6) as $z) echo "   $z\n";
 }
+
+// --- Klammerzusaetze: EPG zaehlt Teile, der Katalog nennt das Jahr -----------
+// Gefunden am 22.08.2026 an einem echten Timer, der als S00E00 auf der Box stand.
+$k2 = new Episodenkatalog('/var/lib/symcon/serienrecorder/');
+if ($k2->serien() > 0) {
+    $f = $k2->finde('Death in Paradise', 'Weihnachtsmänner in Gefahr (2)');
+    printf("  [%s] %-52s ist=%s soll=S00E07\n",
+        ($f && $f['staffel'] === 0 && $f['folge'] === 7) ? 'ok' : 'FEHLER',
+        'Klammerzusatz (2) trifft Katalogtitel (2024)',
+        $f ? sprintf('S%02dE%02d', $f['staffel'], $f['folge']) : 'nichts');
+    $g = $k2->finde('Death in Paradise', 'Maria');
+    printf("  [%s] %-52s ist=%s soll=S14E01\n",
+        ($g && $g['staffel'] === 14 && $g['folge'] === 1) ? 'ok' : 'FEHLER',
+        'gewoehnlicher Titel weiterhin exakt',
+        $g ? sprintf('S%02dE%02d', $g['staffel'], $g['folge']) : 'nichts');
+    // Kein Ratespiel: ein anderes Jahr ist eine andere Folge.
+    $h = $k2->finde('Death in Paradise', 'Christmas Special 2024');
+    printf("  [%s] %-52s ist=%s soll=nichts\n", $h === null ? 'ok' : 'FEHLER',
+        'anderes Jahr wird NICHT verwechselt', $h ? sprintf('S%02dE%02d', $h['staffel'], $h['folge']) : 'nichts');
+}
