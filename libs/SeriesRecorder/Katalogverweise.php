@@ -36,7 +36,13 @@ final class Katalogverweise
     /** @var array<string,array{name:string,id:int}> Vergleichsform => TMDB */
     private array $tmdb = [];
 
-    public function __construct(private string $verzeichnis)
+    /**
+     * @param array<string,array{tvdb:int,tmdb:int}> $vonHand Vergleichsform des
+     *        Seriennamens => selbst vergebene Kennungen. Sie gewinnen: wer eine
+     *        Kennung von Hand eintraegt, hat nachgesehen - die Ablage hat nur
+     *        geraten.
+     */
+    public function __construct(private string $verzeichnis, private array $vonHand = [])
     {
         $this->leseTvdb();
         $this->leseTmdb();
@@ -52,6 +58,13 @@ final class Katalogverweise
         $k = Bestand::form($serie);
         $t = $this->tvdb[$k] ?? null;
         $m = $this->tmdb[$k] ?? null;
+        $h = $this->vonHand[$k] ?? null;
+        if ($h !== null && $h['tvdb'] > 0) {
+            $t = ['name' => $t['name'] ?? '', 'id' => $h['tvdb'], 'slug' => ($t['id'] ?? 0) === $h['tvdb'] ? ($t['slug'] ?? '') : ''];
+        }
+        if ($h !== null && $h['tmdb'] > 0) {
+            $m = ['name' => ($m['id'] ?? 0) === $h['tmdb'] ? ($m['name'] ?? '') : '', 'id' => $h['tmdb']];
+        }
         return [
             'tvdb'     => $t === null ? '' : ($t['slug'] !== ''
                             ? 'https://thetvdb.com/series/' . rawurlencode($t['slug'])

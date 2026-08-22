@@ -15,12 +15,14 @@ require_once __DIR__ . '/../libs/SeriesRecorder/Bestandsscan.php';
 require_once __DIR__ . '/../libs/SeriesRecorder/Receiver.php';
 require_once __DIR__ . '/../libs/SeriesRecorder/Duplikate.php';
 require_once __DIR__ . '/../libs/SeriesRecorder/Katalogverweise.php';
+require_once __DIR__ . '/../libs/SeriesRecorder/Katalogzuordnung.php';
 require_once __DIR__ . '/../libs/SeriesRecorder/Dateisatz.php';
 
 use Hoep\SeriesRecorder\Analyse;
 use Hoep\SeriesRecorder\Bedingungen;
 use Hoep\SeriesRecorder\Staffelregeln;
 use Hoep\SeriesRecorder\Katalogverweise;
+use Hoep\SeriesRecorder\Katalogzuordnung;
 use Hoep\SeriesRecorder\Bestand;
 use Hoep\SeriesRecorder\Bestandsscan;
 use Hoep\SeriesRecorder\Dateisatz;
@@ -152,6 +154,10 @@ class SeriesRecorder extends IPSModule
         $this->RegisterPropertyString('Titeltabelle', '[]');      // XMLTV-Titel => Favorit + Ablagename
         $this->RegisterPropertyString('Bedingungen', '[]');       // Serie + Feld + Vergleich + Wert
         $this->RegisterPropertyString('Staffeltabelle', '[]');    // Serie + von + nach
+        // Selbst vergebene Kennungen bei TheTVDB und TMDB. Sie sind kein Luxus:
+        // die Seriensuche von TheTVDB v3 ist tot, und ohne Kennung gibt es fuer
+        // eine unbekannte Serie keinen Weg zu Staffel und Folge.
+        $this->RegisterPropertyString('Katalogtabelle', '[]');    // Serie + TheTVDB-ID + TMDB-ID
 
         // Die Liste der Serien, die aufgenommen werden sollen. Sie ist der
         // Master - die Wunschliste wird HINEIN konsolidiert, nicht umgekehrt.
@@ -207,6 +213,10 @@ class SeriesRecorder extends IPSModule
         // Ausstrahlungstabelle traegt Anzeigetext (inzwischen sogar Bilder) und
         // taugt nicht als Nachschlagewerk.
         $this->RegisterVariableString('Marken', 'Bestandsmarken (JSON)', '', 195);
+
+        // Handeintraege dorthin schreiben, wo die Handler ihre Suchergebnisse
+        // erwarten - beim Speichern und damit sofort, nicht erst beim naechsten Lauf.
+        $this->schreibeKatalogzuordnung();
         // Zwei Zahlen aus dem Bestandsscan als eigene Variablen - nicht nur als
         // Text. Nur so lassen sie sich aufzeichnen, und nur so kann die Historie
         // des Altsystems ("Aufnahmen in der Datenbank", zwei Jahre) hier
@@ -257,6 +267,7 @@ class SeriesRecorder extends IPSModule
         }
 
         $vorschau = max(1, $this->ReadPropertyInteger('Vorschau'));
+        $this->schreibeKatalogzuordnung();   // Handeintraege gueltig halten
         $a = $this->baueAnalyse();
         // Die selbst geholte Datei hat Vorrang; fehlt sie, wird die des
         // Altsystems gelesen. So laeuft das Modul in jeder Ausbaustufe.
@@ -1181,6 +1192,17 @@ class SeriesRecorder extends IPSModule
                      ]]],
                     ['caption' => 'Wert', 'name' => 'wert', 'width' => 'auto', 'add' => 0, 'edit' => ['type' => 'NumberSpinner']],
                  ]],
+                ['type' => 'Label', 'caption' => '— Kennungen von Hand: nur noetig, wo die Datenbanken die Serie nicht selbst finden —'],
+                ['type' => 'List', 'name' => 'Katalogtabelle',
+                 'caption' => 'Die Nummer steht in der Adresse der Serienseite. 0 = nichts eintragen.',
+                 'add' => true, 'delete' => true, 'columns' => [
+                    ['caption' => 'Serie', 'name' => 'serie', 'width' => '300px', 'add' => '', 'edit' => ['type' => 'ValidationTextBox']],
+                    ['caption' => 'TheTVDB-ID', 'name' => 'tvdb', 'width' => '140px', 'add' => 0, 'edit' => ['type' => 'NumberSpinner', 'minimum' => 0, 'maximum' => 99999999]],
+                    ['caption' => 'TMDB-ID', 'name' => 'tmdb', 'width' => 'auto', 'add' => 0, 'edit' => ['type' => 'NumberSpinner', 'minimum' => 0, 'maximum' => 99999999]],
+                 ]],
+                ['type' => 'Label', 'caption' => 'Die Eintragung wirkt sofort: sie wird dorthin geschrieben, wo die Anreicherung ihre '
+                    . 'Suchergebnisse erwartet - die Suche wird damit uebersprungen. Das ist bei TheTVDB der einzige Weg, denn dessen '
+                    . 'Seriensuche antwortet seit einiger Zeit gar nicht mehr.'],
                 ['type' => 'Label', 'caption' => '— Staffel berichtigen: was das EPG nicht kennt, landet sonst in "Season 0" —'],
                 ['type' => 'List', 'name' => 'Staffeltabelle',
                  'caption' => 'von: "0" = nur wenn keine Staffel bekannt ist, "*" = jede Staffel',
@@ -1451,6 +1473,23 @@ class SeriesRecorder extends IPSModule
                                     JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     }
 
+    /**
+     * Die Handeintraege in die Ablagen schreiben.
+     *
+     * Bei jedem Speichern UND bei jedem Lauf: der uebernommene Handler haelt
+     * eine Ablage nur begrenzte Zeit fuer gueltig (Vorgabe 168 Stunden) und
+     * wuerde danach wieder suchen - eine Handeintragung darf aber nicht nach
+     * einer Woche verfallen.
+     *
+     * @return array{tvdb:int,tmdb:int,fehler:list<string>}
+     */
+    private function schreibeKatalogzuordnung(): array
+    {
+        return Katalogzuordnung::schreibe(
+            rtrim($this->ReadPropertyString('Datenpfad'), '/'),
+            Katalogzuordnung::ausJson($this->ReadPropertyString('Katalogtabelle')));
+    }
+
     /** @return list<string> */
     private function fehlendeDateien(): array
     {
@@ -1696,7 +1735,8 @@ class SeriesRecorder extends IPSModule
      */
     private function serientabelle(?array $sendungen): string
     {
-        $verweise = new Katalogverweise(rtrim($this->ReadPropertyString('Datenpfad'), '/'));
+        $verweise = new Katalogverweise(rtrim($this->ReadPropertyString('Datenpfad'), '/'),
+            Katalogzuordnung::karte(Katalogzuordnung::ausJson($this->ReadPropertyString('Katalogtabelle'))));
         $regeln = json_decode($this->ReadPropertyString('Staffeltabelle'), true) ?: [];
         $regelText = [];
         foreach ($regeln as $z) {
