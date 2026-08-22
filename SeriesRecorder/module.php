@@ -1006,6 +1006,75 @@ class SeriesRecorder extends IPSModule
     }
 
     /**
+     * Eine Kennung bei TheTVDB oder TMDB setzen - von aussen, ohne Formular.
+     *
+     * Dafuer da, dass die Zuordnung dort passieren kann, wo die Luecke auffaellt:
+     * in der Serienuebersicht. Wer erst die Instanz oeffnen, die Tabelle finden
+     * und den Namen abtippen muss, macht es nicht.
+     *
+     * @param string $Feld 'tvdb' oder 'tmdb'
+     * @param int    $Id   die Nummer aus der Adresse der Serienseite; 0 loescht
+     *                     den Eintrag wieder
+     */
+    public function KennungSetzen(string $Serie, string $Feld, int $Id): string
+    {
+        $Serie = trim($Serie);
+        $Feld  = strtolower(trim($Feld));
+        if ($Serie === '' || ($Feld !== 'tvdb' && $Feld !== 'tmdb')) {
+            return json_encode(['ok' => false, 'fehler' => 'Serie und Feld (tvdb|tmdb) noetig']);
+        }
+        if ($Id < 0) {
+            return json_encode(['ok' => false, 'fehler' => 'Nummer darf nicht negativ sein']);
+        }
+        // Die Serie muss auf der Liste stehen. Sonst legt ein Tippfehler eine
+        // Zeile an, die nie wieder auffaellt.
+        $bekannt = false;
+        foreach ($this->favoriten() as $n) {
+            if (Bestand::form($n) === Bestand::form($Serie)) {
+                $Serie = $n;              // Schreibweise der Liste gewinnt
+                $bekannt = true;
+                break;
+            }
+        }
+        if (!$bekannt) {
+            return json_encode(['ok' => false, 'fehler' => 'Serie steht nicht auf der Aufnahmeliste'],
+                               JSON_UNESCAPED_UNICODE);
+        }
+
+        $tab = Katalogzuordnung::ausJson($this->ReadPropertyString('Katalogtabelle'));
+        $treffer = false;
+        foreach ($tab as $i => $z) {
+            if (Bestand::form($z['serie']) !== Bestand::form($Serie)) {
+                continue;
+            }
+            $tab[$i][$Feld] = $Id;
+            $treffer = true;
+            break;
+        }
+        if (!$treffer) {
+            $tab[] = ['serie' => $Serie, 'tvdb' => $Feld === 'tvdb' ? $Id : 0, 'tmdb' => $Feld === 'tmdb' ? $Id : 0];
+        }
+        // Zeilen ohne jede Kennung wieder wegraeumen.
+        $tab = array_values(array_filter($tab, static fn(array $z): bool => $z['tvdb'] > 0 || $z['tmdb'] > 0));
+
+        IPS_SetProperty($this->InstanceID, 'Katalogtabelle',
+            (string) json_encode(array_values($tab), JSON_UNESCAPED_UNICODE));
+        IPS_ApplyChanges($this->InstanceID);   // schreibt die Ablagen gleich mit
+
+        // Die Uebersicht soll sofort stimmen - sie ist ja die Stelle, an der man
+        // gerade steht. ABER nur, wenn dieser Prozess den letzten Lauf noch
+        // kennt: sonst entstuende eine Tabelle ohne Ausstrahlungen, in der jede
+        // Serie "ruht" - und die stuende dann bis zum naechsten Lauf da.
+        $sendungen = $this->letzteSendungen();
+        if ($sendungen !== []) {
+            $this->SetValue('Serien', $this->serientabelle($sendungen));
+        }
+
+        return json_encode(['ok' => true, 'serie' => $Serie, 'feld' => $Feld, 'id' => $Id,
+                            'anzahl' => count($tab)], JSON_UNESCAPED_UNICODE);
+    }
+
+    /**
      * Die Liste, wie sie gerade gilt - fuer den Programmfuehrer und fuer jeden,
      * der wissen will, was aufgenommen wird.
      */
