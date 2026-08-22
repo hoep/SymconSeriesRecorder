@@ -118,6 +118,11 @@ final class Analyse
             }
             $treffer[] = [
                 'kanal'  => $kanal[$s['kanal']],
+                // Die XMLTV-Kennung des Senders unveraendert mitnehmen. Der
+                // Programmfuehrer fuehrt seine Sender genau darunter; ueber den
+                // Namen zu gehen hiesse, drei Schreibweisen gegeneinander zu
+                // normalisieren ("ORF 1HD", "ORF1 HD", "ORF 1 AT").
+                'kanalId' => (string) $s['kanal'],
                 'sender' => $sender[$s['kanal']] ?? $s['kanal'],
                 'serie'  => $t['ablage'],
                 'titel'  => $s['untertitel'] !== '' ? $s['untertitel'] : $t['zusatz'],

@@ -202,6 +202,11 @@ class SeriesRecorder extends IPSModule
         $this->RegisterVariableString('Matching', 'Matching (JSON)', '', 170);
         $this->RegisterVariableString('Protokoll', 'Protokoll (JSON)', '', 180);
         $this->RegisterVariableString('Kennzahlen', 'Kennzahlen (JSON)', '', 190);
+        // Welche Ausstrahlungen schon auf der Platte liegen - fuer die Markierung
+        // im Programmfuehrer. Bewusst eine eigene, schmale Variable: die grosse
+        // Ausstrahlungstabelle traegt Anzeigetext (inzwischen sogar Bilder) und
+        // taugt nicht als Nachschlagewerk.
+        $this->RegisterVariableString('Marken', 'Bestandsmarken (JSON)', '', 195);
         // Zwei Zahlen aus dem Bestandsscan als eigene Variablen - nicht nur als
         // Text. Nur so lassen sie sich aufzeichnen, und nur so kann die Historie
         // des Altsystems ("Aufnahmen in der Datenbank", zwei Jahre) hier
@@ -271,6 +276,7 @@ class SeriesRecorder extends IPSModule
             Analyse::alsTabelle($e['sendungen'], fn(array $s): string => $this->senderZelle(
                 $karte, (string) ($s['kanal'] ?? ''), (string) ($s['sender'] ?? ''))),
             JSON_UNESCAPED_UNICODE));
+        $this->SetValue('Marken', $this->bestandsmarken($e['sendungen']));
         $this->SetValue('OffeneSender', implode("\n", $e['offeneSender']));
         $this->SetValue('Serien', $this->serientabelle($e['sendungen']));
         $this->SetValue('Matching', (string) json_encode(
@@ -1413,6 +1419,36 @@ class SeriesRecorder extends IPSModule
     private function pfad(string $property): string
     {
         return rtrim($this->ReadPropertyString('Datenpfad'), '/') . '/' . ltrim($this->ReadPropertyString($property), '/');
+    }
+
+    /**
+     * Was schon auf der Platte liegt, als Nachschlagewerk fuer den Programmfuehrer.
+     *
+     * Schluessel ist die XMLTV-Kennung des Senders und die Startzeit - dieselbe
+     * Kennung, unter der das Raster seine Sender fuehrt. Ueber den Namen zu
+     * gehen hiesse, drei Schreibweisen gegeneinander zu normalisieren.
+     *
+     * "mehrfach" zaehlt dazu: auch das liegt auf der Platte, nur oefter als
+     * noetig. Wer die Sendung sucht, will genau das wissen.
+     *
+     * @param list<array<string,mixed>> $sendungen
+     */
+    private function bestandsmarken(array $sendungen): string
+    {
+        $marken = [];
+        foreach ($sendungen as $s) {
+            $u = (string) ($s['urteil'] ?? '');
+            if ($u !== 'vorhanden' && $u !== 'mehrfach') {
+                continue;
+            }
+            $k = trim((string) ($s['kanalId'] ?? ''));
+            if ($k === '') {
+                continue;
+            }
+            $marken[$k . '|' . (int) $s['start']] = $u === 'mehrfach' ? 2 : 1;
+        }
+        return (string) json_encode(['stand' => time(), 'anzahl' => count($marken), 'marken' => $marken],
+                                    JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     }
 
     /** @return list<string> */
