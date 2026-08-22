@@ -77,6 +77,30 @@ Zeitfenster 20.-26.08., derselbe Datenbestand:
     zusaetzlich  29   (Walking on Sunshine 22, Law & Order 4, Kroatien-Krimi 2,
                        Barcelona-Krimi 2, Barbie 1)
 
+## Wohin aufgenommen wird
+
+Zwei Felder, dieselbe Ablage aus zwei Blickwinkeln:
+
+| Feld | Sicht | wofuer |
+|---|---|---|
+| `ReceiverAufnahmepfad` | Einhaengepunkt am Receiver | geht als `dirname` an den Timer |
+| `AufnahmepfadLokal` | Einhaengepunkt in Symcon | dort wird der Ordner angelegt |
+
+Der Timer bekommt **`<Basis>/<Serie>/Season <n>/`**. Die Serie ist der
+*Ablagename* (nicht der Favoritenname - "CSI: Miami" heisst auf der Platte
+"CSI Miami"), die Staffel kommt aus der Nummer; ohne bekannte Staffel `Season 0`.
+Genau so hat es das Altskript getan, und genau so sucht der Bestandsscan.
+
+Enigma legt ein unbekanntes Aufnahmeverzeichnis **nicht** selbst an - der Timer
+entsteht, die Aufnahme scheitert. Deshalb wird der Ordner vorher ueber den
+Symcon-Einhaengepunkt erzeugt, aber nur unterhalb des eingestellten Pfades und
+nur, wenn dieser existiert. Ob das Paar zusammenpasst, steht als ausgerechnetes
+Beispiel im Formular.
+
+Leerzeichen im Pfad sind unkritisch: `http_build_query` kodiert sie, und die Box
+liest sie unveraendert zurueck (gemessen am 22.08.2026 mit
+`/mnt/net/VUAufnahmen/02 - Filme Sabina`).
+
 ## Welche Serien aufgenommen werden
 
 Die Eigenschaft **Serienliste** ist der Master. Jede Zeile hat drei Angaben:
