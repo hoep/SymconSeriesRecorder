@@ -77,6 +77,33 @@ Zeitfenster 20.-26.08., derselbe Datenbestand:
     zusaetzlich  29   (Walking on Sunshine 22, Law & Order 4, Kroatien-Krimi 2,
                        Barcelona-Krimi 2, Barbie 1)
 
+## Welche Serien aufgenommen werden
+
+Die Eigenschaft **Serienliste** ist der Master. Jede Zeile hat drei Angaben:
+Name, Herkunft (`wunschliste` oder `eigen`) und den Schalter *Aufnehmen*.
+
+Die Wunschliste von wunschliste.de wird bei jedem Bezug **hinein konsolidiert**:
+neue Namen kommen als `wunschliste` dazu, dort geloeschte fallen wieder heraus.
+Zeilen der Herkunft `eigen` fasst der Abgleich nie an. Eine leere Antwort der
+Webseite aendert gar nichts - sie bedeutet fast immer, dass die Anmeldung nicht
+durchging, und wuerde sonst die ganze Planung leeren.
+
+Damit haengt der Betrieb nicht mehr an einer fremden Anmeldestrecke: von der
+Wunschliste verbrauchen wir nur Namen (Sendetermine kommen aus dem XMLTV,
+Nummern aus Katalog/TMDB/TheTVDB), sie war aber der einzige Weg, eine Serie
+hinzuzufuegen.
+
+| Fall | Was passiert |
+|---|---|
+| Serie auf wunschliste.de gemerkt | kommt beim naechsten Bezug als `wunschliste` dazu |
+| dort entfernt | faellt heraus - ausser die Zeile steht auf `eigen` |
+| Schalter auf *aus* | wird nicht aufgenommen, bleibt aber auf der Webseite stehen |
+| aus dem Programmfuehrer hinzugefuegt | kommt als `eigen` dazu |
+
+Von aussen: `SR_SerieHinzufuegen($id, 'Name')`, `SR_SerieEntfernen($id, 'Name')`,
+`SR_Serienliste($id)`. Im Programmfuehrer erledigt das die Pille *Serie
+aufnehmen* im Sendungsfenster.
+
 ## Abdeckung gegenueber der Skript-Fassung
 
 Die alte Fassung hat 284 Methoden in 15 Klassen. Was davon im Modul steckt:
@@ -85,7 +112,7 @@ Die alte Fassung hat 284 Methoden in 15 Klassen. Was davon im Modul steckt:
 |-----------------------------|----:|-------|
 | Matching (Titel/Sender)     |  23 | neu gebaut, ersetzt |
 | XMLTV lesen                 |  15 | Lesen/Parsen ja, Download und Vorfilter-Datei nein |
-| Wunschliste (Web)           |  15 | offen - das Modul liest die Datei, die das Altsystem schreibt |
+| Wunschliste (Web)           |  15 | Bezug erledigt; die Liste fuehrt jetzt das Modul (siehe unten) |
 | Episoden-Logik              |  35 | offen |
 | TVDB-Anreicherung           |  18 | offen (kapseln, nicht neu schreiben) |
 | Aufnahmen-Bestand (Platte)  |  31 | offen (kapseln) |

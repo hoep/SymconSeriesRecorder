@@ -10,6 +10,7 @@ require_once __DIR__ . '/../libs/SeriesRecorder/TmdbQuelle.php';
 require_once __DIR__ . '/../libs/SeriesRecorder/TvdbQuelle.php';
 require_once __DIR__ . '/../libs/SeriesRecorder/XmltvBezug.php';
 require_once __DIR__ . '/../libs/SeriesRecorder/WunschlisteBezug.php';
+require_once __DIR__ . '/../libs/SeriesRecorder/Serienliste.php';
 require_once __DIR__ . '/../libs/SeriesRecorder/Bestandsscan.php';
 require_once __DIR__ . '/../libs/SeriesRecorder/Receiver.php';
 require_once __DIR__ . '/../libs/SeriesRecorder/Duplikate.php';
@@ -26,6 +27,7 @@ use Hoep\SeriesRecorder\Dateisatz;
 use Hoep\SeriesRecorder\Duplikate;
 use Hoep\SeriesRecorder\Episodenkatalog;
 use Hoep\SeriesRecorder\Quellenkette;
+use Hoep\SeriesRecorder\Serienliste;
 use Hoep\SeriesRecorder\Receiver;
 use Hoep\SeriesRecorder\TmdbQuelle;
 use Hoep\SeriesRecorder\TvdbQuelle;
@@ -36,15 +38,23 @@ use Hoep\SeriesRecorder\XmltvBezug;
 use Hoep\SeriesRecorder\XmltvLeser;
 
 /**
- * Serienrecorder (Phase 0/1).
+ * Serienrecorder.
  *
- * Das Modul liest in diesem Stand ausschliesslich: es ordnet die Ausstrahlungen
- * des XMLTV der Wunschliste zu und legt das Ergebnis in Variablen ab. Es spricht
- * KEINEN Receiver an, programmiert keine Timer und loescht keine Aufnahme - das
- * bleibt der Skript-Fassung, bis beide Seiten ueber mehrere Tage dasselbe sagen.
+ * Das Modul ordnet die Ausstrahlungen des XMLTV den Serien zu, die aufgenommen
+ * werden sollen, gleicht sie gegen den Bestand auf der Platte ab und schickt,
+ * was fehlt, ueber die Instanz EnigmaReceiver an die Box. Der Weg zum Receiver
+ * fuehrt ausschliesslich dort entlang - zwei Absender auf demselben Geraet
+ * waeren doppelte Aufnahmen.
  *
- * Die Eigenschaft "Scharf" existiert schon, wirkt aber noch auf nichts. Sie ist
- * das Gate fuer Phase 3; wer sie einschaltet, aendert heute kein Verhalten.
+ * Zwei Gates, absichtlich getrennt: "Scharf" erlaubt das Programmieren,
+ * "LoeschenScharf" das Loeschen von Duplikaten. Wer aufnehmen will, soll damit
+ * nicht nebenbei die Erlaubnis zum Loeschen erteilen.
+ *
+ * WELCHE Serien aufgenommen werden, steht in der Eigenschaft "Serienliste".
+ * Sie ist der Master; die Wunschliste von wunschliste.de wird bei jedem Bezug
+ * HINEIN konsolidiert. Von dort verbrauchen wir ohnehin nur Namen - aber sie
+ * war frueher auch der einzige Weg, eine Serie hinzuzufuegen, und damit hing
+ * der Betrieb an einer fremden Anmeldestrecke.
  */
 class SeriesRecorder extends IPSModule
 {
@@ -136,6 +146,13 @@ class SeriesRecorder extends IPSModule
         $this->RegisterPropertyString('Titeltabelle', '[]');      // XMLTV-Titel => Favorit + Ablagename
         $this->RegisterPropertyString('Bedingungen', '[]');       // Serie + Feld + Vergleich + Wert
         $this->RegisterPropertyString('Staffeltabelle', '[]');    // Serie + von + nach
+
+        // Die Liste der Serien, die aufgenommen werden sollen. Sie ist der
+        // Master - die Wunschliste wird HINEIN konsolidiert, nicht umgekehrt.
+        // Warum nicht weiter die Datei allein: von ihr verbrauchen wir nur den
+        // Namen, aber sie war der einzige Weg, eine Serie AUFZUNEHMEN. Faellt
+        // die fremde Anmeldestrecke aus, ginge sonst gar nichts mehr.
+        $this->RegisterPropertyString('Serienliste', '[]');       // Serie + Herkunft + Schalter
 
         // Der Weg zum Receiver fuehrt ueber das Modul EnigmaReceiver, nicht ueber
         // eine eigene Verbindung. Dort sitzt das Gate, dort stehen Vor- und
@@ -895,11 +912,73 @@ class SeriesRecorder extends IPSModule
             rtrim($this->ReadPropertyString('Datenpfad'), '/')
         );
         $e = $b->hole();
-        $this->SetValue('Wunschliste', sprintf('%s · %s%s · %.1f s',
+        // Und sofort in die eigene Liste eintragen. Ohne diesen Schritt kaeme
+        // eine auf der Webseite neu gemerkte Serie nirgends mehr an - die
+        // Zuordnung liest ja die Liste, nicht die Datei.
+        $k = $this->uebernimmWunschliste();
+        $e['neu'] = $k['neu'];
+        $e['weg'] = $k['weg'];
+        $this->SetValue('Wunschliste', sprintf('%s · %s%s · %.1f s%s',
             date('d.m. H:i'), $e['meldung'],
             $e['anzahl'] > 0 ? (' (' . $e['anzahl'] . ' Serien)') : '',
-            $e['dauerMs'] / 1000));
+            $e['dauerMs'] / 1000,
+            $k['geaendert'] ? sprintf(' · %+d in der Liste', count($k['neu']) - count($k['weg'])) : ''));
         return json_encode($e, JSON_UNESCAPED_UNICODE);
+    }
+
+    /**
+     * Traegt die Wunschlisten-Datei in die eigene Serienliste ein.
+     *
+     * @return array{neu:list<string>,weg:list<string>,geaendert:bool}
+     */
+    private function uebernimmWunschliste(): array
+    {
+        $k = Serienliste::konsolidiere($this->aufnahmeliste(), $this->favoritenAusDatei());
+        if ($k['geaendert']) {
+            $this->serienlisteSchreiben($k['tabelle']);
+        }
+        return ['neu' => $k['neu'], 'weg' => $k['weg'], 'geaendert' => $k['geaendert']];
+    }
+
+    /**
+     * Nimmt eine Serie in die Aufnahme - der Weg aus dem Programmfuehrer.
+     *
+     * Bewusst ueber den Namen und nicht ueber eine Kennung: was aus dem EPG
+     * kommt, ist ein Titel, und derselbe Titel ist auch das, woran die
+     * Zuordnung spaeter arbeitet.
+     */
+    public function SerieHinzufuegen(string $Serie): string
+    {
+        $e = Serienliste::eintragen($this->aufnahmeliste(), $Serie);
+        $this->serienlisteSchreiben($e['tabelle']);
+        return json_encode(['ok' => $e['zustand'] !== 'leer', 'serie' => trim($Serie),
+                            'zustand' => $e['zustand'], 'anzahl' => count($e['tabelle'])],
+                           JSON_UNESCAPED_UNICODE);
+    }
+
+    /** Nimmt eine Serie aus der Aufnahme. Wunschlisten-Zeilen werden nur ausgeschaltet. */
+    public function SerieEntfernen(string $Serie): string
+    {
+        $e = Serienliste::austragen($this->aufnahmeliste(), $Serie);
+        $this->serienlisteSchreiben($e['tabelle']);
+        return json_encode(['ok' => true, 'serie' => trim($Serie),
+                            'zustand' => $e['zustand'], 'anzahl' => count($e['tabelle'])],
+                           JSON_UNESCAPED_UNICODE);
+    }
+
+    /**
+     * Die Liste, wie sie gerade gilt - fuer den Programmfuehrer und fuer jeden,
+     * der wissen will, was aufgenommen wird.
+     */
+    public function Serienliste(): string
+    {
+        $t = $this->aufnahmeliste();
+        return json_encode([
+            'ok'     => true,
+            'anzahl' => count($t),
+            'aktiv'  => count(Serienliste::namen($t)),
+            'serien' => $t,
+        ], JSON_UNESCAPED_UNICODE);
     }
 
     /** Diagnose: welche Nummer kennt der Episoden-Cache zu dieser Folge? */
@@ -937,6 +1016,14 @@ class SeriesRecorder extends IPSModule
         $hinweis = $fehlt === []
             ? 'Alle Quelldateien gefunden.'
             : 'FEHLT: ' . implode(', ', $fehlt);
+
+        $liste = $this->aufnahmeliste();
+        $ausWl = count(array_filter($liste, static fn(array $z): bool => $z['quelle'] === 'wunschliste'));
+        $listeText = $liste === []
+            ? 'Noch leer - bis zum ersten Abgleich gelten die Namen direkt aus der Wunschlisten-Datei. '
+              . 'Der Knopf "Wunschliste jetzt holen" traegt sie ein.'
+            : sprintf('%d Serien, davon %d aktiv · %d von der Wunschliste, %d eigene.',
+                count($liste), count(Serienliste::namen($liste)), $ausWl, count($liste) - $ausWl);
 
         return json_encode([
             'elements' => [
@@ -992,6 +1079,22 @@ class SeriesRecorder extends IPSModule
                     ['type' => 'NumberSpinner', 'name' => 'TvdbDeckel', 'caption' => 'Hoechstens Abfragen je Lauf', 'minimum' => 1, 'maximum' => 500],
                     ['type' => 'NumberSpinner', 'name' => 'TvdbCacheStunden', 'caption' => 'Antworten gelten (Stunden)', 'minimum' => 1, 'maximum' => 8760],
                 ]],
+                ['type' => 'Label', 'caption' => '— Serien, die aufgenommen werden —'],
+                ['type' => 'Label', 'caption' => $listeText],
+                ['type' => 'List', 'name' => 'Serienliste', 'caption' => 'Herkunft "wunschliste" wird beim Abgleich gepflegt, "eigen" nie angefasst',
+                 'rowCount' => 12, 'add' => ['serie' => '', 'quelle' => 'eigen', 'aktiv' => true],
+                 'delete' => true, 'sort' => ['column' => 'serie', 'direction' => 'ascending'],
+                 'columns' => [
+                    ['caption' => 'Serie', 'name' => 'serie', 'width' => 'auto', 'add' => '', 'edit' => ['type' => 'ValidationTextBox']],
+                    ['caption' => 'Herkunft', 'name' => 'quelle', 'width' => '150px', 'add' => 'eigen',
+                     'edit' => ['type' => 'Select', 'options' => [
+                        ['caption' => 'eigen', 'value' => 'eigen'],
+                        ['caption' => 'Wunschliste', 'value' => 'wunschliste'],
+                     ]]],
+                    ['caption' => 'Aufnehmen', 'name' => 'aktiv', 'width' => '110px', 'add' => true, 'edit' => ['type' => 'CheckBox']],
+                 ]],
+                ['type' => 'Label', 'caption' => 'Eine Zeile auf "aus" nimmt die Serie aus der Aufnahme, ohne sie auf wunschliste.de zu entfernen. '
+                    . 'Wer eine Wunschlisten-Zeile auf "eigen" stellt, behaelt sie auch dann, wenn sie dort verschwindet.'],
                 ['type' => 'Label', 'caption' => '— Quelldateien —'],
                 ['type' => 'ValidationTextBox', 'name' => 'Datenpfad', 'caption' => 'Verzeichnis'],
                 ['type' => 'ValidationTextBox', 'name' => 'XmltvDatei', 'caption' => 'XMLTV'],
@@ -1059,6 +1162,7 @@ class SeriesRecorder extends IPSModule
                 ['type' => 'Button', 'caption' => 'Jetzt lesen (ohne Wirkung)', 'onClick' => 'SR_Analyse($id);'],
                 ['type' => 'Button', 'caption' => 'Programmvorschau jetzt holen', 'onClick' => 'echo SR_HoleProgramm($id);'],
                 ['type' => 'Button', 'caption' => 'Wunschliste jetzt holen', 'onClick' => 'echo SR_HoleWunschliste($id);'],
+                ['type' => 'Button', 'caption' => 'Serienliste anzeigen', 'onClick' => 'echo SR_Serienliste($id);'],
                 ['type' => 'Button', 'caption' => 'Bestand jetzt scannen', 'onClick' => 'echo SR_ScanneBestand($id);'],
                 ['type' => 'Button', 'caption' => 'Duplikate pruefen (loescht nur wenn scharf)', 'onClick' => 'echo SR_PruefeDuplikate($id);'],
                 ['type' => 'RowLayout', 'items' => [
@@ -1128,16 +1232,58 @@ class SeriesRecorder extends IPSModule
         return is_array($d) ? $d : [];
     }
 
-    /** @return list<string> */
+    /**
+     * Die Namen, gegen die das Programm zugeordnet wird.
+     *
+     * Erste Wahl ist die eigene Serienliste. Nur solange sie leer ist - also
+     * vor dem ersten Abgleich - kommen die Namen direkt aus der Datei; sonst
+     * stuende das Modul nach der Umstellung ohne Serien da.
+     *
+     * @return list<string>
+     */
     private function favoriten(): array
     {
-        // Die selbst geholte Liste hat Vorrang, sonst die des Altsystems.
+        $namen = Serienliste::namen($this->aufnahmeliste());
+        return $namen !== [] ? $namen : $this->favoritenAusDatei();
+    }
+
+    /** Die Namen aus der Wunschlisten-Datei: erst die selbst geholte, sonst die des Altsystems.
+     *
+     * @return list<string>
+     */
+    private function favoritenAusDatei(): array
+    {
         $eigen = $this->pfad('WunschZiel');
         $d = $this->json(is_readable($eigen) ? $eigen : $this->pfad('FavoritenDatei'));
         return array_values(array_filter(array_map(
             static fn(array $f): string => trim((string) ($f['name'] ?? '')),
             $d['favorites'] ?? []
         )));
+    }
+
+    /** @return list<array{serie:string,quelle:string,aktiv:bool}> */
+    private function aufnahmeliste(): array
+    {
+        return Serienliste::ausJson($this->ReadPropertyString('Serienliste'));
+    }
+
+    /**
+     * Schreibt die Tabelle zurueck in die Eigenschaft.
+     *
+     * Nur wenn sich wirklich etwas geaendert hat: IPS_ApplyChanges laesst die
+     * Instanz durch ihren Aufbau laufen, und das nach jedem Wunschlisten-Bezug
+     * zu tun, waere Arbeit ohne Anlass.
+     *
+     * @param list<array{serie:string,quelle:string,aktiv:bool}> $tabelle
+     */
+    private function serienlisteSchreiben(array $tabelle): void
+    {
+        $neu = json_encode(array_values($tabelle), JSON_UNESCAPED_UNICODE);
+        if ($neu === false || $neu === $this->ReadPropertyString('Serienliste')) {
+            return;
+        }
+        IPS_SetProperty($this->InstanceID, 'Serienliste', $neu);
+        IPS_ApplyChanges($this->InstanceID);
     }
 
     /** @return list<string> */
