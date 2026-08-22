@@ -83,7 +83,35 @@ final class Episodenkatalog implements EpisodenQuelle
                 }
             }
         }
+        // Klammerzusaetze am Ende weglassen. Beide Seiten haengen dort gern etwas
+        // an, und zwar Verschiedenes: das EPG zaehlt Teile ("Weihnachtsmaenner in
+        // Gefahr (2)"), der Katalog nennt das Jahr ("Weihnachtsmaenner in Gefahr
+        // (2024)"). Ohne diesen Schritt blieb genau so ein Fall bei S00E00 stehen,
+        // obwohl die Folge im Katalog steht - gefunden am 22.08.2026.
+        $tOhne = self::ohneKlammer($episodentitel);
+        if ($tOhne !== '' && mb_strlen($tOhne) >= 6) {
+            foreach ($this->katalog[$s] as $kt => $nr) {
+                if ($kt === $tOhne || self::ohneKlammer($kt) === $tOhne) {
+                    return $nr;
+                }
+            }
+            // Zuletzt: der Katalogtitel faengt mit dem EPG-Titel an. "Christmas
+            // Special" trifft damit "Christmas Special 2025", aber ein kurzer
+            // Allerweltstitel nicht jede Folge - deshalb erst ab sechs Zeichen.
+            foreach ($this->katalog[$s] as $kt => $nr) {
+                if (str_starts_with($kt, $tOhne)) {
+                    return $nr;
+                }
+            }
+        }
         return null;
+    }
+
+    /** Vergleichsform ohne abschliessenden Klammerzusatz. */
+    private static function ohneKlammer(string $titel): string
+    {
+        $t = trim((string) preg_replace('/\s*\([^)]*\)\s*$/u', '', trim($titel)));
+        return Bestand::form($t);
     }
 
     private function lade(): void
