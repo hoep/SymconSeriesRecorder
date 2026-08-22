@@ -1066,6 +1066,14 @@ class SeriesRecorder extends IPSModule
         // kennt: sonst entstuende eine Tabelle ohne Ausstrahlungen, in der jede
         // Serie "ruht" - und die stuende dann bis zum naechsten Lauf da.
         $sendungen = $this->letzteSendungen();
+        if ($sendungen === []) {
+            // Ein Aufruf von aussen kennt den letzten Lauf nicht - der lebt nur
+            // im Prozess, der ihn gerechnet hat. Die Zaehlungen stehen aber
+            // ohnehin in der Ausstrahlungstabelle; von dort genuegt, was die
+            // Uebersicht braucht. Ohne das saehe man seine Eintragung erst beim
+            // naechsten Lauf, und das haelt niemand fuer "hat geklappt".
+            $sendungen = $this->sendungenAusTabelle();
+        }
         if ($sendungen !== []) {
             $this->SetValue('Serien', $this->serientabelle($sendungen));
         }
@@ -1872,6 +1880,35 @@ class SeriesRecorder extends IPSModule
             ];
         }
         return (string) json_encode($zeilen, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    }
+
+    /**
+     * Die Zaehlungen des letzten Laufs aus der Ausstrahlungstabelle zurueckholen.
+     *
+     * Nur Serie und Nummer - mehr braucht die Uebersicht nicht, und mehr steht
+     * dort auch nicht mehr in verwertbarer Form (die Senderspalte traegt
+     * inzwischen ein Bild).
+     *
+     * @return list<array<string,mixed>>
+     */
+    private function sendungenAusTabelle(): array
+    {
+        $j = json_decode((string) @$this->GetValue('Ausstrahlungen'), true);
+        if (!is_array($j) || count($j) < 2) {
+            return [];
+        }
+        $kopf = array_map('strval', (array) $j[0]);
+        $iS = array_search('Serie', $kopf, true);
+        $iN = array_search('Folge', $kopf, true);
+        if ($iS === false) {
+            return [];
+        }
+        $out = [];
+        foreach (array_slice($j, 1) as $r) {
+            $out[] = ['serie' => (string) ($r[$iS] ?? ''),
+                      'staffelFolge' => $iN === false ? '' : (string) ($r[$iN] ?? '')];
+        }
+        return $out;
     }
 
     /** @return list<array<string,mixed>> Sendungen des letzten Laufs in diesem Prozess */
