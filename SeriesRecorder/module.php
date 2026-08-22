@@ -1339,11 +1339,34 @@ class SeriesRecorder extends IPSModule
             }
             // Nur was wirklich daliegt. Ein Verweis ins Leere waere ein kaputtes
             // Bild in jeder Zeile - schlechter als der blosse Name.
-            if (is_file($ordner . $datei . '.png')) {
-                $out[mb_strtolower($name, 'UTF-8')] = $datei . '.png';
+            if (!is_file($ordner . $datei . '.png')) {
+                continue;
+            }
+            // Unter der Vergleichsform ablegen, nicht unter dem Namen: die
+            // Kanaltabelle sagt "ORF 1HD", die Box sagt "ORF1 HD" - ein Zeichen
+            // Unterschied, und sechs Sender blieben ohne Logo. Zusaetzlich ohne
+            // die Kennung am Ende, damit "ATV2" auch "ATV2 HD" findet; der
+            // erste Treffer gewinnt, also die Fassung, die zuerst in der Liste
+            // steht.
+            $k = self::kanalForm($name);
+            $out[$k] = $datei . '.png';
+            $kurz = preg_replace('/(uhd|hd|sd)$/', '', $k) ?? $k;
+            if ($kurz !== '' && $kurz !== $k && !isset($out[$kurz])) {
+                $out[$kurz] = $datei . '.png';
             }
         }
         return $out;
+    }
+
+    /**
+     * Vergleichsform eines Kanalnamens: alles weg, was nur Schreibweise ist.
+     *
+     * "ORF 1HD", "ORF1 HD" und "orf1hd" sind derselbe Sender - nur schreibt ihn
+     * jede Quelle anders. Punkte gehoeren dazu ("SAT.1"), Bindestriche auch.
+     */
+    private static function kanalForm(string $name): string
+    {
+        return preg_replace('/[^a-z0-9]+/', '', mb_strtolower(trim($name), 'UTF-8')) ?? '';
     }
 
     /**
@@ -1359,7 +1382,9 @@ class SeriesRecorder extends IPSModule
      */
     private function senderZelle(array $karte, string $kanal, string $anzeige): string
     {
-        $datei = $karte[mb_strtolower(trim($kanal), 'UTF-8')] ?? '';
+        $k = self::kanalForm($kanal);
+        $kurz = preg_replace('/(uhd|hd|sd)$/', '', $k) ?? $k;
+        $datei = $karte[$k] ?? ($karte[$kurz] ?? '');
         if ($datei === '') {
             return $anzeige;
         }
