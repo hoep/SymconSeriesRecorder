@@ -115,8 +115,14 @@ class SeriesRecorder extends IPSModule
         // Weil beide auf 2 stehen, faellt es dort nicht auf.
         $this->RegisterPropertyInteger('Vorlauf', 2);
         $this->RegisterPropertyInteger('Nachlauf', 2);
-        // Zielpfad AUF DEM RECEIVER (nicht der Einhaengepunkt hier).
+        // Dieselbe Ablage aus zwei Blickwinkeln: der Receiver kennt sie unter
+        // seinem Einhaengepunkt, Symcon unter dem eigenen. Beides wird gebraucht -
+        // der erste Pfad geht als Aufnahmeverzeichnis an den Timer, im zweiten
+        // wird der Serienordner angelegt. Enigma legt ihn NICHT selbst an; fehlt
+        // er, laeuft die Aufnahme ins Leere. Genau deshalb hat es das Altskript
+        // auch getan (30398: mkdir auf SymconDir vor jedem timeradd).
         $this->RegisterPropertyString('ReceiverAufnahmepfad', '/mnt/net/VUAufnahmen');
+        $this->RegisterPropertyString('AufnahmepfadLokal', '/mnt/Aufnahmen');
         // Duplikate: Suchen ist harmlos, Loeschen haengt am Scharf-Gate.
         $this->RegisterPropertyInteger('IntervallDuplikate', 0);
         $this->RegisterPropertyString('Datenpfad', '/var/lib/symcon/serienrecorder/');
@@ -345,6 +351,14 @@ class SeriesRecorder extends IPSModule
                 'titel'  => $this->timername($x),
                 'kurz'   => (string) ($x['titel'] ?? ''),
             ];
+            // Ablageort je Serie und Staffel. Ohne ihn landet alles im
+            // Vorgabeordner der Box - und der Bestandsscan, der nach
+            // "<Serie>/Season <n>" sucht, findet die Aufnahme nie wieder.
+            $verz = $this->aufnahmeverzeichnis($x);
+            if ($verz !== '') {
+                $auftrag['verzeichnis'] = $verz;
+                $this->legeOrdnerAn($x);
+            }
             $v = json_decode(ER_PlaneAufnahme($er, json_encode($auftrag)), true);
             $zeile = [date('d.m.', (int) $x['start']), date('H:i', (int) $x['start']),
                       (string) $x['serie'], (string) ($x['staffelFolge'] ?? ''), (string) $x['sender']];
@@ -1017,6 +1031,19 @@ class SeriesRecorder extends IPSModule
             ? 'Alle Quelldateien gefunden.'
             : 'FEHLT: ' . implode(', ', $fehlt);
 
+        // Die beiden Pfade beschreiben DIESELBE Ablage - einmal wie der Receiver
+        // sie sieht, einmal wie Symcon sie sieht. Ob das Paar zusammenpasst,
+        // sieht man nicht am Text, sondern nur daran, ob der Ordner da ist.
+        // Deshalb steht es hier ausgerechnet statt nur beschrieben.
+        $basisR = rtrim(trim($this->ReadPropertyString('ReceiverAufnahmepfad')), '/');
+        $basisL = rtrim(trim($this->ReadPropertyString('AufnahmepfadLokal')), '/');
+        $pfadText = $basisR === ''
+            ? 'Basis leer - der Timer bekommt kein Verzeichnis, die Box nimmt ihre Vorgabe.'
+            : sprintf('So sieht es der Timer: %s/Tatort/Season 2/ — und so Symcon: %s/Tatort/Season 2 (%s). '
+                    . 'Passt das nicht zusammen, zeigen die beiden Felder auf verschiedene Ablagen.',
+                $basisR, $basisL === '' ? '(nicht gesetzt)' : $basisL,
+                ($basisL !== '' && is_dir($basisL)) ? 'Ablage gefunden' : 'ABLAGE NICHT GEFUNDEN');
+
         $liste = $this->aufnahmeliste();
         $ausWl = count(array_filter($liste, static fn(array $z): bool => $z['quelle'] === 'wunschliste'));
         $listeText = $liste === []
@@ -1049,7 +1076,12 @@ class SeriesRecorder extends IPSModule
                 ['type' => 'ValidationTextBox', 'name' => 'ReceiverIp', 'caption' => 'Adresse'],
                 ['type' => 'ValidationTextBox', 'name' => 'ReceiverBouquet', 'caption' => 'Bouquet (optional)'],
                 ['type' => 'NumberSpinner', 'name' => 'ReceiverTuner', 'caption' => 'Verfuegbare Tuner', 'minimum' => 1, 'maximum' => 64],
-                ['type' => 'ValidationTextBox', 'name' => 'ReceiverAufnahmepfad', 'caption' => 'Aufnahmepfad auf dem Receiver'],
+                ['type' => 'ValidationTextBox', 'name' => 'ReceiverAufnahmepfad', 'caption' => 'Aufnahmepfad auf dem Receiver (Basis)'],
+                ['type' => 'ValidationTextBox', 'name' => 'AufnahmepfadLokal', 'caption' => 'Dieselbe Ablage aus Sicht von Symcon'],
+                ['type' => 'Label', 'caption' => $pfadText],
+                ['type' => 'Label', 'caption' => 'Der Timer bekommt "<Basis>/<Serie>/Season <n>/" - so lagen die Aufnahmen schon unter dem Altsystem, '
+                    . 'und so sucht sie der Bestandsscan. Im zweiten Pfad wird der Ordner vorher angelegt: Enigma legt ein unbekanntes '
+                    . 'Aufnahmeverzeichnis nicht selbst an. Basis leer = Vorgabe der Box.'],
                 // Vor- und Nachlauf stehen bewusst NICHT hier. Sie gehoeren dem
                 // Receiver: jede Box hat eigene Anlauf- und Umschaltzeiten, und
                 // ER_PlaneAufnahme rechnet sie aus ihrer Instanz dazu. Zwei
@@ -1202,6 +1234,66 @@ class SeriesRecorder extends IPSModule
         return new Analyse($this->favoriten(), $tt['aliase'], $tt['ablage'], $this->empfangbar(),
             $this->kanaltabelle(), new Bestand($this->bestandsdatei()), $this->bedingungen(),
             $this->episodenquelle(), $this->receiver(), $this->staffelregeln());
+    }
+
+    /**
+     * Der Ablageort einer Aufnahme AUF DEM RECEIVER.
+     *
+     * Aufgebaut wie im Altsystem: "<Basis>/<Serie>/Season <n>/". Die Serie ist
+     * der ABLAGENAME, nicht der Favoritenname - "CSI: Miami" heisst auf der
+     * Platte "CSI Miami", und ein Doppelpunkt im Pfad waere dort ohnehin nicht
+     * zu gebrauchen. Die Staffel kommt aus der Nummer; ist keine bekannt,
+     * schreibt das Altsystem "Season 0", und die vorhandenen Aufnahmen liegen
+     * so. Wer hier abweicht, legt eine zweite Ablage neben der bestehenden an.
+     *
+     * @param array<string,mixed> $s
+     */
+    private function aufnahmeverzeichnis(array $s): string
+    {
+        $basis = rtrim(trim($this->ReadPropertyString('ReceiverAufnahmepfad')), '/');
+        if ($basis === '') {
+            return '';                      // leer = Vorgabe der Box, wie im Receiver-Modul
+        }
+        $serie = trim((string) ($s['serie'] ?? ''));
+        if ($serie === '') {
+            return $basis . '/';
+        }
+        return $basis . '/' . $serie . '/Season ' . $this->staffelnummer($s) . '/';
+    }
+
+    /** @param array<string,mixed> $s */
+    private function staffelnummer(array $s): int
+    {
+        return preg_match('/^S(\d+)/i', (string) ($s['staffelFolge'] ?? ''), $m) ? (int) $m[1] : 0;
+    }
+
+    /**
+     * Denselben Ordner auf der Symcon-Seite anlegen.
+     *
+     * Enigma legt ein unbekanntes Aufnahmeverzeichnis nicht an - der Timer
+     * entsteht, die Aufnahme scheitert. Das Altskript hat den Ordner deshalb vor
+     * jedem timeradd erzeugt, und zwar ueber den Einhaengepunkt hier.
+     *
+     * Angelegt wird NUR unterhalb des eingestellten Pfades und nur, wenn dieser
+     * wirklich existiert. Ein vertippter Pfad soll keine Ordner im Nirgendwo
+     * erzeugen - und schon gar keine ausserhalb der Ablage.
+     *
+     * @param array<string,mixed> $s
+     */
+    private function legeOrdnerAn(array $s): void
+    {
+        $lokal = rtrim(trim($this->ReadPropertyString('AufnahmepfadLokal')), '/');
+        $serie = trim((string) ($s['serie'] ?? ''));
+        if ($lokal === '' || $serie === '' || !is_dir($lokal)) {
+            return;
+        }
+        $ziel = $lokal . '/' . $serie . '/Season ' . $this->staffelnummer($s);
+        if (is_dir($ziel)) {
+            return;
+        }
+        if (@mkdir($ziel, 0777, true)) {
+            $this->LogMessage('Aufnahmeordner angelegt: ' . $ziel, KL_MESSAGE);
+        }
     }
 
     private function pfad(string $property): string
