@@ -62,7 +62,8 @@ final class Duplikate
             $titel = '';
             foreach (array_slice($f, 2) as $feld) {
                 if ($nummer === '' && preg_match('/^\s*S\d{1,4}E\d{1,4}\s*$/i', (string) $feld)) {
-                    $nummer = strtolower(trim((string) $feld));
+                    // Dieselbe Schreibweise wie ueberall sonst: S03E05.
+                    $nummer = Bestand::nummerForm((string) $feld);
                 } else {
                     $titel = (string) $feld;
                 }
@@ -70,7 +71,7 @@ final class Duplikate
             // Ohne Nummer ist keine sichere Gruppe zu bilden: zwei Folgen koennen
             // denselben Titel tragen ("Teil 1"), und ein Fehlgriff loescht hier
             // eine echte Aufnahme.
-            if ($nummer === '' || $nummer === 's00e00') {
+            if ($nummer === '' || $nummer === 'S00E00') {
                 continue;
             }
             $s = Bestand::form($serie);
@@ -142,7 +143,7 @@ final class Duplikate
             }
             $gruppen[] = [
                 'serie'    => $behalten['serie'],
-                'nummer'   => strtoupper($behalten['nummer']),
+                'nummer'   => $behalten['nummer'],
                 'titel'    => $behalten['titel'],
                 'behalten' => $behalten,
                 'loeschen' => array_values($liste),
