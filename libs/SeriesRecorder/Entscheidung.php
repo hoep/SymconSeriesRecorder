@@ -82,12 +82,17 @@ final class Entscheidung
         // dem Cache, den sie dabei angelegt hat. Ohne diesen Schritt bleibt eine
         // ganze Serie unentscheidbar: fuer Tatort liefert das EPG NIE Staffel und
         // Folge, im Bestand liegt sie aber unter S2023E26.
+        // Der Titel der QUELLE wird mitgenommen: der Aufnahmebestand ist danach
+        // benannt ("Eisner - 45 - Glueck allein"), das EPG nennt nur den
+        // Folgentitel. Ohne ihn traegt der Timer eine zweite Namensform.
+        $katalogtitel = '';
         if ($this->katalog !== null && $st === 0 && $eptitel !== '') {
             $k = $this->katalog->finde($serie, $eptitel);
             if ($k !== null) {
                 $st = $k['staffel'];
                 $fo = $k['folge'];
                 $quelle = 'katalog';
+                $katalogtitel = (string) ($k['titel'] ?? '');
             }
         }
 
@@ -108,6 +113,7 @@ final class Entscheidung
                 $fo = $k['folge'];
                 $quelle = 'katalog';
                 $eptitel = $zusatz;
+                $katalogtitel = (string) ($k['titel'] ?? '');
             }
         }
 
@@ -127,7 +133,7 @@ final class Entscheidung
         }
 
         $ergebnis = fn(string $u, string $grund, array $dateien = []) => [
-            'urteil' => $u, 'staffel' => $st, 'folge' => $fo,
+            'urteil' => $u, 'staffel' => $st, 'folge' => $fo, 'eptitel' => $katalogtitel,
             'quelle' => $quelle, 'grund' => $grund, 'dateien' => $dateien,
         ];
 

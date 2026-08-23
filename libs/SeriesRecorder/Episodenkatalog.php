@@ -33,7 +33,7 @@ require_once __DIR__ . '/EpisodenQuelle.php';
  */
 final class Episodenkatalog implements EpisodenQuelle
 {
-    /** @var array<string,array<string,array{staffel:int,folge:int}>> Serie => Episodentitel => Nummer */
+    /** @var array<string,array<string,array{staffel:int,folge:int,titel:string}>> Serie => Episodentitel => Nummer */
     private array $katalog = [];
 
     /**
@@ -80,7 +80,13 @@ final class Episodenkatalog implements EpisodenQuelle
     }
 
     /**
-     * @return array{staffel:int,folge:int}|null
+     * Der Rueckgabewert traegt den Episodentitel der QUELLE mit - nicht den, mit
+     * dem gesucht wurde. Der Aufnahmebestand ist danach benannt: "Tatort -
+     * S2019E20 - Eisner - 45 - Glueck allein.ts" traegt den Ermittler und die
+     * Fallnummer, das EPG nennt nur "Glueck allein". Wer den EPG-Titel in den
+     * Timer schreibt, legt eine zweite Namensform in dieselbe Ablage.
+     *
+     * @return array{staffel:int,folge:int,titel:string}|null
      */
     public function finde(string $serie, string $episodentitel): ?array
     {
@@ -243,7 +249,7 @@ final class Episodenkatalog implements EpisodenQuelle
         // Erster Eintrag gewinnt: Wiederholungen und Zweitverwertungen stehen
         // spaeter in den Dumps, die Erstausstrahlung ist die gesuchte Nummer.
         if (!isset($this->katalog[$s][$t])) {
-            $this->katalog[$s][$t] = ['staffel' => $staffel, 'folge' => $folge];
+            $this->katalog[$s][$t] = ['staffel' => $staffel, 'folge' => $folge, 'titel' => trim($titel)];
             $this->episoden++;
         }
     }

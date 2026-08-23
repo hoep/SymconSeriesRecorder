@@ -152,6 +152,16 @@ final class Analyse
                     $this->merkeBestand($marken, $s, $t, $u);
                 }
             }
+            // Der Episodentitel fuer Tabelle und Timername, in dieser Reihenfolge:
+            // der des Katalogs (so heisst die Folge auch auf der Platte), sonst der
+            // Untertitel des EPG, sonst das, was im Titel hinter dem Serienamen
+            // steht - ohne den Trenner, sonst hiesse die Aufnahme ": Trotzdem".
+            $anzeige = (string) ($u['eptitel'] ?? '');
+            if ($anzeige === '') {
+                $anzeige = $s['untertitel'] !== ''
+                    ? (string) $s['untertitel']
+                    : trim((string) preg_replace('/^\s*(?::|[–—-])\s*/u', '', (string) $t['zusatz']));
+            }
             $treffer[] = [
                 'kanal'  => $kanal[$s['kanal']],
                 // Die XMLTV-Kennung des Senders unveraendert mitnehmen. Der
@@ -161,7 +171,7 @@ final class Analyse
                 'kanalId' => (string) $s['kanal'],
                 'sender' => $sender[$s['kanal']] ?? $s['kanal'],
                 'serie'  => $t['ablage'],
-                'titel'  => $s['untertitel'] !== '' ? $s['untertitel'] : $t['zusatz'],
+                'titel'  => $anzeige,
                 'start'  => $s['start'],
                 'ende'   => $s['ende'],
                 'folge'  => $s['folge'],
