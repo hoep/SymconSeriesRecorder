@@ -1551,6 +1551,7 @@ class SeriesRecorder extends IPSModule
     private function bestandsmarken(array $sendungen, array $nachschlag = []): string
     {
         $marken = $nachschlag;
+        $nummern = [];
         foreach ($sendungen as $s) {
             $k = trim((string) ($s['kanalId'] ?? ''));
             if ($k === '') {
@@ -1566,7 +1567,19 @@ class SeriesRecorder extends IPSModule
             }
             $marken[$k . '|' . (int) $s['start']] = $u === 'mehrfach' ? 2 : 1;
         }
-        return (string) json_encode(['stand' => time(), 'anzahl' => count($marken), 'marken' => $marken],
+        // Die ermittelte Nummer gleich mitgeben. Das EPG zeigt sonst die des
+        // XMLTV, und die ist bei den Krimireihen entweder gar keine oder eine
+        // laufende Nummer ohne Staffel - "E1245" statt "S2024E21". Ermittelt
+        // wird sie ohnehin, nur wusste bisher niemand ausserhalb davon.
+        foreach ($sendungen as $s) {
+            $k = trim((string) ($s['kanalId'] ?? ''));
+            $nr = (string) ($s['staffelFolge'] ?? '');
+            if ($k !== '' && $nr !== '') {
+                $nummern[$k . '|' . (int) $s['start']] = $nr;
+            }
+        }
+        return (string) json_encode(['stand' => time(), 'anzahl' => count($marken),
+                                     'marken' => $marken, 'nummern' => $nummern],
                                     JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     }
 

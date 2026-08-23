@@ -125,10 +125,17 @@ final class Analyse
                 continue;
             }
             $z['zugeordnet']++;
+            // Was hinter dem Serienamen im Titel steht, kommt als EIGENES Feld mit:
+            // bei den Krimireihen klebt der Episodentitel dort ("Tatort: Trotzdem")
+            // und das Untertitel-Feld bleibt leer. Der Entscheider darf es aber nur
+            // benutzen, wenn der Katalog es als Episodentitel bestaetigt - sonst
+            // wuerde aus "Lethal Weapon - Zwei stahlharte Profis" (dem Kinofilm)
+            // eine Folge der Serie.
             $u = $urteiler?->fuer([
                 'serie'      => $t['ablage'],
                 'titel'      => $s['titel'],
                 'untertitel' => $s['untertitel'],
+                'zusatz'     => $t['zusatz'],
                 'folgeNum'   => $s['folge'],
                 'kanal'      => $kanal[$s['kanal']],
                 'start'      => $s['start'],

@@ -56,3 +56,35 @@ if ($k2->serien() > 0) {
     printf("  [%s] %-52s ist=%s soll=nichts\n", $h === null ? 'ok' : 'FEHLER',
         'anderes Jahr wird NICHT verwechselt', $h ? sprintf('S%02dE%02d', $h['staffel'], $h['folge']) : 'nichts');
 }
+
+// --- Eine Serie, eine Zaehlung ----------------------------------------------
+// Fuer Tatort liegen zwei Quellen nebeneinander: der Serien-Dump zaehlt nach
+// JAHR (S2024E21), der TVDB-Cache nach Staffel (S55E21). Der Aufnahmebestand
+// liegt unter der Jahreszaehlung, und die Serien-Schranke des Nutzers ist als
+// "season >= 2024" geschrieben - mischt man beides, kommt kein Tatort mehr
+// durch. Gefunden am 23.08.2026.
+foreach ([['Trotzdem', 2024, 21], ['Glück allein', 2019, 20], ['Gegen den Kopf', 2013, 24]] as [$t, $st, $fo]) {
+    $r = $k->finde('Tatort', $t);
+    printf("  [%s] %-52s ist=%s soll=S%04dE%02d\n",
+        ($r && $r['staffel'] === $st && $r['folge'] === $fo) ? 'ok' : 'FEHLER',
+        'Dump schlaegt TVDB: Tatort "' . $t . '"',
+        $r ? sprintf('S%04dE%02d', $r['staffel'], $r['folge']) : 'nichts', $st, $fo);
+}
+
+// --- Episodentitel aus dem TITEL --------------------------------------------
+// "Tatort: Trotzdem" traegt den Episodentitel im Titel, das Untertitel-Feld
+// bleibt leer. Der Zusatz zaehlt nur, wenn der Katalog ihn bestaetigt - sonst
+// wuerde aus dem Kinofilm "Lethal Weapon - Zwei stahlharte Profis" eine Folge.
+$en = new Entscheidung($best, $bed, $k);
+$en->beginneLauf();
+$faelle = [
+    ['Tatort', 'Tatort: Trotzdem', ': Trotzdem', 2024, 21, 'katalog'],
+    ['Lethal Weapon', 'Lethal Weapon - Zwei stahlharte Profis', '- Zwei stahlharte Profis', 0, 0, ''],
+];
+foreach ($faelle as [$serie, $titel, $zusatz, $st, $fo, $quelle]) {
+    $u = $en->fuer(['serie' => $serie, 'titel' => $titel, 'untertitel' => '', 'zusatz' => $zusatz, 'folgeNum' => '']);
+    $gut = ($u['staffel'] === $st && $u['folge'] === $fo && ($u['quelle'] ?: '') === $quelle);
+    printf("  [%s] %-52s ist=S%04dE%02d/%s soll=S%04dE%02d/%s\n", $gut ? 'ok' : 'FEHLER',
+        'Zusatz nur mit Bestaetigung: ' . mb_strimwidth($titel, 0, 30, '…'),
+        $u['staffel'], $u['folge'], $u['quelle'] ?: '-', $st, $fo, $quelle ?: '-');
+}

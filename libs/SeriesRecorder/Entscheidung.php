@@ -91,6 +91,26 @@ final class Entscheidung
             }
         }
 
+        // Zweiter Versuch mit dem, was im TITEL hinter dem Serienamen steht.
+        // "Tatort: Trotzdem" traegt den Episodentitel dort, das Untertitel-Feld
+        // bleibt leer - ohne diesen Griff bliebe die Reihe bei S00, obwohl der
+        // Katalog die Folge kennt.
+        //
+        // Der Katalog muss es BESTAETIGEN. Findet er nichts, bleibt der Zusatz
+        // aussen vor: "Lethal Weapon - Zwei stahlharte Profis" ist der Kinofilm
+        // und keine Folge, und ein unbestaetigter Zusatz wuerde aus dem
+        // ehrlichen "unklar" ein "aufnehmen" machen.
+        $zusatz = trim((string) ($sendung['zusatz'] ?? ''));
+        if ($this->katalog !== null && $st === 0 && $eptitel === '' && $zusatz !== '') {
+            $k = $this->katalog->finde($serie, $zusatz);
+            if ($k !== null) {
+                $st = $k['staffel'];
+                $fo = $k['folge'];
+                $quelle = 'katalog';
+                $eptitel = $zusatz;
+            }
+        }
+
         // Staffel berichtigen, BEVOR irgendetwas verglichen wird.
         //
         // Die Reihenfolge ist der ganze Punkt: der Bestand auf der Platte liegt

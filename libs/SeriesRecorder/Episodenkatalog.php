@@ -36,6 +36,23 @@ final class Episodenkatalog implements EpisodenQuelle
     /** @var array<string,array<string,array{staffel:int,folge:int}>> Serie => Episodentitel => Nummer */
     private array $katalog = [];
 
+    /**
+     * Serien mit eigenem Dump (Format A) - fuer sie werden die anderen Quellen
+     * NICHT mehr gelesen.
+     *
+     * Eine Serie, eine Zaehlung. Tatort zaehlt im Dump nach JAHR (S2024E21),
+     * bei TheTVDB nach Staffel (S55E21) - dieselbe Folge, zwei Nummern. Der
+     * Aufnahmebestand liegt unter der Jahreszaehlung ("Tatort/Season 2024"),
+     * die Serien-Schranke des Nutzers ist als "season >= 2024" geschrieben.
+     * Mischt man beides, findet der Bestandsabgleich die Folge nicht mehr ueber
+     * die Nummer und die Schranke schliesst jede Ausstrahlung aus, weil 55
+     * nun einmal kleiner ist als 2024. Gemessen am 23.08.2026: kein einziger
+     * Tatort kam durch.
+     *
+     * @var array<string,bool>
+     */
+    private array $eigenerDump = [];
+
     private int $serien = 0;
     private int $episoden = 0;
 
@@ -131,6 +148,7 @@ final class Episodenkatalog implements EpisodenQuelle
             if (!is_array($liste)) {
                 continue;
             }
+            $this->eigenerDump[Bestand::form($name)] = true;
             foreach ($liste as $e) {
                 $this->merke($name, (string) ($e['EpisodeName'] ?? ''),
                     (int) ($e['SeasonNumber'] ?? 0), (int) ($e['EpisodeNumber'] ?? 0));
@@ -138,6 +156,7 @@ final class Episodenkatalog implements EpisodenQuelle
         }
 
         // --- Format B: TVDB-Cache, Name steckt in den Suchantworten daneben
+        $this->quelle = 'B';
         $namen = [];
         foreach (glob($v . '/tvdb/series_search_*.json') ?: [] as $datei) {
             $d = self::json($datei);
@@ -174,6 +193,7 @@ final class Episodenkatalog implements EpisodenQuelle
         // was TMDB frisch holt, fuer den Katalog unsichtbar - beim naechsten
         // Lauf muesste dieselbe Folge erneut ueber die Schnittstelle geholt
         // werden, obwohl sie laengst auf der Platte liegt.
+        $this->quelle = 'C';
         if ($this->mitTmdb) {
             foreach (glob($v . '/tmdb/series_*/series_info.json') ?: [] as $datei) {
                 $info = self::json($datei);
@@ -199,6 +219,9 @@ final class Episodenkatalog implements EpisodenQuelle
         $this->serien = count($this->katalog);
     }
 
+    /** Welches Format gerade eingelesen wird - 'A', 'B' oder 'C'. */
+    private string $quelle = 'A';
+
     private function merke(string $serie, string $titel, int $staffel, int $folge): void
     {
         if ($titel === '' || ($staffel === 0 && $folge === 0)) {
@@ -207,6 +230,11 @@ final class Episodenkatalog implements EpisodenQuelle
         $s = Bestand::form($serie);
         $t = Bestand::form($titel);
         if ($s === '' || $t === '') {
+            return;
+        }
+        // Format A hat das letzte Wort: liegt fuer diese Serie ein Dump vor,
+        // kommt keine zweite Zaehlung dazu.
+        if (($this->quelle !== 'A') && isset($this->eigenerDump[$s])) {
             return;
         }
         // Erster Eintrag gewinnt: Wiederholungen und Zweitverwertungen stehen
