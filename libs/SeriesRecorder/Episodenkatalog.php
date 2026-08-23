@@ -37,21 +37,24 @@ final class Episodenkatalog implements EpisodenQuelle
     private array $katalog = [];
 
     /**
-     * Serien mit eigenem Dump (Format A) - fuer sie werden die anderen Quellen
-     * NICHT mehr gelesen.
+     * Serien, fuer die TheTVDB etwas hergibt - fuer sie wird TMDB NICHT gelesen.
      *
-     * Eine Serie, eine Zaehlung. Tatort zaehlt im Dump nach JAHR (S2024E21),
-     * bei TheTVDB nach Staffel (S55E21) - dieselbe Folge, zwei Nummern. Der
-     * Aufnahmebestand liegt unter der Jahreszaehlung ("Tatort/Season 2024"),
-     * die Serien-Schranke des Nutzers ist als "season >= 2024" geschrieben.
-     * Mischt man beides, findet der Bestandsabgleich die Folge nicht mehr ueber
-     * die Nummer und die Schranke schliesst jede Ausstrahlung aus, weil 55
-     * nun einmal kleiner ist als 2024. Gemessen am 23.08.2026: kein einziger
-     * Tatort kam durch.
+     * TheTVDB hat Vorrang, und zwar aus einem handfesten Grund: eine Serie
+     * vertraegt nur EINE Zaehlung. Tatort fuehrt TheTVDB nach JAHR (S2024E21) -
+     * so steht es im Serien-Dump wie im TVDB-Zwischenlager, und genau so liegt
+     * die Aufnahme auf der Platte ("Tatort/Season 2024"). TMDB zaehlt dieselbe
+     * Serie fortlaufend (S55E21). Mischt man beides, findet der Bestandsabgleich
+     * die Folge nicht mehr ueber die Nummer, und eine Schranke wie
+     * "season >= 2024" schliesst jede Ausstrahlung aus, weil 55 nun einmal
+     * kleiner ist als 2024. Gemessen am 23.08.2026: kein einziger Tatort kam
+     * durch, obwohl beide TheTVDB-Quellen die richtige Nummer kannten.
+     *
+     * TMDB bleibt fuer alles andere die Nachhut - fuer Serien, die TheTVDB
+     * nicht kennt, ist es die einzige Quelle.
      *
      * @var array<string,bool>
      */
-    private array $eigenerDump = [];
+    private array $vonTvdb = [];
 
     private int $serien = 0;
     private int $episoden = 0;
@@ -148,7 +151,7 @@ final class Episodenkatalog implements EpisodenQuelle
             if (!is_array($liste)) {
                 continue;
             }
-            $this->eigenerDump[Bestand::form($name)] = true;
+            $this->vonTvdb[Bestand::form($name)] = true;
             foreach ($liste as $e) {
                 $this->merke($name, (string) ($e['EpisodeName'] ?? ''),
                     (int) ($e['SeasonNumber'] ?? 0), (int) ($e['EpisodeNumber'] ?? 0));
@@ -174,6 +177,7 @@ final class Episodenkatalog implements EpisodenQuelle
             if ($name === '') {
                 continue;   // ohne Serienname ist der Eintrag nicht zuzuordnen
             }
+            $this->vonTvdb[Bestand::form($name)] = true;
             $liste = self::json($datei);
             if (!is_array($liste)) {
                 continue;
@@ -232,9 +236,8 @@ final class Episodenkatalog implements EpisodenQuelle
         if ($s === '' || $t === '') {
             return;
         }
-        // Format A hat das letzte Wort: liegt fuer diese Serie ein Dump vor,
-        // kommt keine zweite Zaehlung dazu.
-        if (($this->quelle !== 'A') && isset($this->eigenerDump[$s])) {
+        // TheTVDB hat Vorrang: kennt es die Serie, kommt TMDB nicht mehr dazu.
+        if ($this->quelle === 'C' && isset($this->vonTvdb[$s])) {
             return;
         }
         // Erster Eintrag gewinnt: Wiederholungen und Zweitverwertungen stehen

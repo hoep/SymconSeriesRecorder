@@ -57,17 +57,18 @@ if ($k2->serien() > 0) {
         'anderes Jahr wird NICHT verwechselt', $h ? sprintf('S%02dE%02d', $h['staffel'], $h['folge']) : 'nichts');
 }
 
-// --- Eine Serie, eine Zaehlung ----------------------------------------------
-// Fuer Tatort liegen zwei Quellen nebeneinander: der Serien-Dump zaehlt nach
-// JAHR (S2024E21), der TVDB-Cache nach Staffel (S55E21). Der Aufnahmebestand
-// liegt unter der Jahreszaehlung, und die Serien-Schranke des Nutzers ist als
-// "season >= 2024" geschrieben - mischt man beides, kommt kein Tatort mehr
-// durch. Gefunden am 23.08.2026.
+// --- TheTVDB hat Vorrang ----------------------------------------------------
+// Fuer Tatort liegen drei Quellen nebeneinander. TheTVDB zaehlt nach JAHR
+// (S2024E21) - im Serien-Dump wie im tvdb-Zwischenlager, und genau so liegt die
+// Aufnahme auf der Platte. TMDB zaehlt dieselbe Serie fortlaufend (S55E21), und
+// weil dessen Episodentitel blank ist ("Trotzdem" statt "Voss - 10 - Trotzdem"),
+// traf er exakt und gewann. Mit der Folge, dass die Schranke "season >= 2024"
+// jede Ausstrahlung ausschloss. Gefunden am 23.08.2026.
 foreach ([['Trotzdem', 2024, 21], ['Glück allein', 2019, 20], ['Gegen den Kopf', 2013, 24]] as [$t, $st, $fo]) {
     $r = $k->finde('Tatort', $t);
     printf("  [%s] %-52s ist=%s soll=S%04dE%02d\n",
         ($r && $r['staffel'] === $st && $r['folge'] === $fo) ? 'ok' : 'FEHLER',
-        'Dump schlaegt TVDB: Tatort "' . $t . '"',
+        'TheTVDB schlaegt TMDB: Tatort "' . $t . '"',
         $r ? sprintf('S%04dE%02d', $r['staffel'], $r['folge']) : 'nichts', $st, $fo);
 }
 
