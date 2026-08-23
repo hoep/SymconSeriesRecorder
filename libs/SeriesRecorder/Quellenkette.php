@@ -48,6 +48,27 @@ final class Quellenkette implements EpisodenQuelle
         return null;
     }
 
+    /**
+     * Der Episodentitel zu einer bekannten Nummer - bei der ersten Quelle, die
+     * den Weg zurueck ueberhaupt kennt.
+     *
+     * Nicht jede Quelle kann das: die Netzquellen suchen nach Titel, der
+     * Dateikatalog haelt beide Richtungen. Deshalb wird gefragt, nicht verlangt.
+     */
+    public function titelZuNummer(string $serie, int $staffel, int $folge): string
+    {
+        foreach ($this->quellen as $q) {
+            if (!method_exists($q, 'titelZuNummer')) {
+                continue;
+            }
+            $t = (string) $q->titelZuNummer($serie, $staffel, $folge);
+            if ($t !== '') {
+                return $t;
+            }
+        }
+        return '';
+    }
+
     public function bericht(): string
     {
         return implode(' | ', array_map(static fn(EpisodenQuelle $q): string => $q->bericht(), $this->quellen));
