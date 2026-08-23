@@ -56,6 +56,9 @@ final class Episodenkatalog implements EpisodenQuelle
      */
     private array $vonTvdb = [];
 
+    /** @var array<string,string> "serie|S01E02" => Episodentitel der Quelle */
+    private array $nachNummer = [];
+
     private int $serien = 0;
     private int $episoden = 0;
 
@@ -131,6 +134,23 @@ final class Episodenkatalog implements EpisodenQuelle
             }
         }
         return null;
+    }
+
+    /**
+     * Der Episodentitel zu einer bekannten Nummer.
+     *
+     * Der Weg zurueck: sonst wird nur nachgeschlagen, was noch keine Nummer hat.
+     * Das EPG liefert bei manchen Serien zwar die Nummer, als Titel aber die
+     * Nummer noch einmal ("(S03/E09)") - und die Aufnahme auf der Platte heisst
+     * "Walking on Sunshine - S03E09 - Folge 29".
+     */
+    public function titelZuNummer(string $serie, int $staffel, int $folge): string
+    {
+        $s = Bestand::form($serie);
+        if ($s === '' || ($staffel === 0 && $folge === 0)) {
+            return '';
+        }
+        return $this->nachNummer[$s . '|' . Bestand::nummer($staffel, $folge)] ?? '';
     }
 
     /** Vergleichsform ohne abschliessenden Klammerzusatz. */
@@ -251,6 +271,10 @@ final class Episodenkatalog implements EpisodenQuelle
         if (!isset($this->katalog[$s][$t])) {
             $this->katalog[$s][$t] = ['staffel' => $staffel, 'folge' => $folge, 'titel' => trim($titel)];
             $this->episoden++;
+        }
+        $n = $s . '|' . Bestand::nummer($staffel, $folge);
+        if (!isset($this->nachNummer[$n])) {
+            $this->nachNummer[$n] = trim($titel);
         }
     }
 

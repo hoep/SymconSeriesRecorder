@@ -63,6 +63,15 @@ final class Entscheidung
      * @param array{serie:string,titel:string,untertitel?:string,folgeNum?:string,kanal?:string,start?:int,ende?:int} $sendung
      * @return array{urteil:string,staffel:int,folge:int,quelle:string,grund:string,dateien:list<string>}
      */
+    /** Ein Episodentitel, der keiner ist: leer oder nur die Nummer ("(S03/E09)", "3x07"). */
+    private static function nurNummer(string $t): bool
+    {
+        $t = trim($t);
+        return $t === ''
+            || preg_match('/^\(?\s*S\s*\d{1,4}\s*[\/ ]?\s*E\s*\d{1,4}\s*\)?$/i', $t) === 1
+            || preg_match('/^\(?\s*\d{1,2}\s*x\s*\d{1,3}\s*\)?$/i', $t) === 1;
+    }
+
     public function fuer(array $sendung): array
     {
         $serie = (string) $sendung['serie'];
@@ -114,6 +123,24 @@ final class Entscheidung
                 $quelle = 'katalog';
                 $eptitel = $zusatz;
                 $katalogtitel = (string) ($k['titel'] ?? '');
+            }
+        }
+
+        // Umgekehrter Weg: Nummer bekannt, Titel unbrauchbar. Das EPG schreibt bei
+        // manchen Serien als Untertitel die Nummer noch einmal ("(S03/E09)"),
+        // waehrend die Aufnahme "Walking on Sunshine - S03E09 - Folge 29" heisst.
+        //
+        // NUR dann. Einen vorhandenen Episodentitel durch den des Katalogs zu
+        // ersetzen waere ein Rueckschritt: bei den alten Serien zaehlen EPG und
+        // Katalog verschieden, und aus "Der Fluch von Kairo" wuerde "Hinter der
+        // Mauer" - eine andere Folge, unter falschem Namen abgelegt. Gemessen am
+        // 23.08.2026: 78 Titel haetten sich geaendert, gut zwanzig davon in eine
+        // fremde Folge.
+        if ($katalogtitel === '' && $this->katalog !== null && ($st > 0 || $fo > 0)
+            && self::nurNummer($eptitel) && method_exists($this->katalog, 'titelZuNummer')) {
+            $kt = $this->katalog->titelZuNummer($serie, $st, $fo);
+            if ($kt !== '') {
+                $katalogtitel = $kt;
             }
         }
 
