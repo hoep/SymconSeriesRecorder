@@ -288,7 +288,49 @@ Fuer die reine Existenzpruefung faellt das nicht auf, weil die Vergleichsform
 Unterstriche ohnehin entfernt. Fuer alles, was die Datei ANFASST - loeschen,
 umbenennen - ist es ein Fehler.
 
-Nicht uebernommen wurde `mount -a`: Das Original ruft es auf, wenn der Scan
-fast nichts findet. Eine Freigabe einzuhaengen ist ein Eingriff ins
-Betriebssystem und gehoert nicht in einen Lesevorgang - das Modul meldet den
-Verdacht und ueberlaesst die Entscheidung.
+**Freigaben:** Vor dem Scan wird geprueft, ob die eingetragenen Verzeichnisse
+ueberhaupt eingehaengt sind - ein leerer Einhaengepunkt liest sich sonst wie
+eine geleerte Platte. Verglichen wird `/proc/mounts` mit `/etc/fstab`:
+eingehaengt wird gezielt, was dort steht und fehlt (`mount <Ziel>`, bei einem
+Rechtefehler einmal mit `sudo -n`). Ein Verzeichnis ohne fstab-Eintrag ist ein
+oertlicher Ordner und wird in Ruhe gelassen. Das pauschale `mount -a` des
+Originals bleibt als zweite Stufe, wenn der Scan trotzdem fast nichts findet.
+
+### Filmablagen: die von Hand mitgeschnittenen Aufnahmen
+
+Neben den Serien gibt es zwei FLACHE Freigaben - aus Sicht der Box
+"02 - Filme Sabina" und "03 - Filme Peter", ueber CIFS `/mnt/Aufnahmen_Sabina`
+und `/mnt/Aufnahmen_Peter`. Dort liegt eine Datei je Aufnahme, ohne
+Serienordner und ohne Folgennummer; der Bestandsscan hat sie bis dahin
+uebersprungen (`zerlege()` verlangt `<Wurzel>/<Serie>/…`) und im Programm war
+nie zu sehen, dass ein Film schon da ist. **1.121 Aufnahmen** waren so unsichtbar.
+
+Sie stehen jetzt als eigene Zeilenart in derselben Liste:
+
+    lfd|#FILM|Titel|Kurzbeschreibung|/mnt/Aufnahmen_Sabina/….ts
+
+Titel und Beschreibung kommen aus der `.meta` des Receivers (Zeile 2 und 3),
+nicht aus dem Dateinamen: dort sind ':' und '/' durch '_' ersetzt. Traegt die
+dritte Zeile eine Folgenangabe ("Folge 2"), ist es eine Reihe und kein Film -
+solche Dateien bleiben draussen, sonst gaelte die ganze Reihe als vorhanden,
+sobald ein einziger Teil auf der Platte liegt.
+
+**Im Programm markiert** wird eine Ausstrahlung, wenn der ganze Sendungstitel
+zu einer Filmaufnahme passt. Zwei Schranken haengen daran, und beide sind
+noetig: die Ausstrahlung darf keine Folge sein (weder Untertitel noch
+Folgennummer), und derselbe Titel darf im gelesenen Zeitraum nicht mehr als
+viermal laufen. Ohne die zweite waeren 112 Ausstrahlungen von "Mein wunderbarer
+Kochsalon" als vorhanden markiert, nur weil jemand einmal eine Folge
+mitgeschnitten hat. Gemessen im Raster ueber vierzehn Tage: **28 zusaetzliche
+Marken**, alle Filme, keine Reihe darunter.
+
+**Duplikate** werden auch hier vorgeschlagen, aber nie von selbst geloescht.
+Der Titel allein traegt nicht: "Das Traumschiff" liegt vierzehnmal da - und
+zwar als vierzehn verschiedene Folgen. Gruppiert wird deshalb ueber Titel UND
+Beschreibung, und nur, wenn die Beschreibung wirklich etwas sagt (nicht leer,
+keine Wiederholung des Titels, keine Senderfloskel wie "Kochshow D 2026
+Altersfreigabe"). Ueber den Titel allein waeren es 118 Gruppen mit 287 Dateien
+und 1,6 TB gewesen - beinahe alles davon falsch. Mit der Beschreibung sind es
+**20 Gruppen mit 31 Dateien (131 GB)**, und weil auch die nicht sicher sind,
+tragen sie in der Liste "Film - pruefen" und werden vom scharfen Loeschen
+ausgenommen.

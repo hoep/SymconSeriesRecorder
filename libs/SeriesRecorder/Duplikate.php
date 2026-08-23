@@ -52,12 +52,35 @@ final class Duplikate
                 $z = mb_convert_encoding($z, 'UTF-8', 'ISO-8859-1');
             }
             $f = explode('|', rtrim($z, "\r\n"));
-            if (count($f) < 5) {
+            if (count($f) < 4) {
                 continue;
             }
             $zeilen++;
             $pfad = (string) array_pop($f);
             $serie = (string) ($f[1] ?? '');
+            // Filmzeile aus einer flachen Ablage: "lfd|#FILM|Titel|Beschreibung|Pfad".
+            // Hier gibt es keine Folgennummer, und der Titel ALLEIN traegt nicht:
+            // "Das Traumschiff" liegt vierzehnmal da - vierzehn verschiedene
+            // Folgen. Gruppiert wird deshalb ueber Titel UND Beschreibung, und
+            // nur, wenn die Beschreibung wirklich etwas sagt (siehe
+            // beschreibungTraegt). Auch dann bleibt die Gruppe UNSICHER: "Aladdin"
+            // von 1992 und der von 2019 koennen dieselbe Zeile tragen. Solche
+            // Gruppen werden vorgeschlagen, nie automatisch geloescht.
+            if ($serie === '#FILM') {
+                $ft = (string) ($f[2] ?? '');
+                $fb = (string) ($f[3] ?? '');
+                $fs = Bestand::form($ft);
+                if ($fs !== '' && self::beschreibungTraegt($ft, $fb)) {
+                    $nach['#film|' . $fs . '|' . Bestand::form($fb)][] = [
+                        'serie' => 'Film', 'nummer' => '', 'titel' => trim($ft . ' - ' . $fb, ' -'),
+                        'unsicher' => true, 'pfad' => $pfad, 'groesse' => 0, 'zeit' => 0,
+                    ];
+                }
+                continue;
+            }
+            if (count($f) < 4) {
+                continue;
+            }
             $nummer = '';
             $titel = '';
             foreach (array_slice($f, 2) as $feld) {
@@ -145,6 +168,7 @@ final class Duplikate
                 'serie'    => $behalten['serie'],
                 'nummer'   => $behalten['nummer'],
                 'titel'    => $behalten['titel'],
+                'unsicher' => !empty($behalten['unsicher']),
                 'behalten' => $behalten,
                 'loeschen' => array_values($liste),
                 'gewinnt'  => $behalten['groesse'] > 0
@@ -162,6 +186,28 @@ final class Duplikate
             // nicht - dann ist das Ergebnis kein Vorschlag, sondern eine Warnung.
             'verlaesslich' => ($unerreichbar === 0 || $unerreichbar < count($gruppen)),
         ];
+    }
+
+    /**
+     * Taugt die Beschreibung als Unterscheidung zweier gleichnamiger Aufnahmen?
+     *
+     * Nein, wenn sie leer ist - dann bleibt nur der Titel, und der ist zu wenig.
+     * Nein auch, wenn sie den Titel bloss wiederholt oder aus der Senderfloskel
+     * besteht ("Promi Taste - Kochshow D 2026 Altersfreigabe ..."): das steht
+     * ueber JEDER Folge der Reihe und wuerde sieben verschiedene Sendungen zu
+     * einer Gruppe zusammenziehen.
+     */
+    private static function beschreibungTraegt(string $titel, string $beschreibung): bool
+    {
+        $b = Bestand::form($beschreibung);
+        if ($b === '' || mb_strlen($b) < 5) {
+            return false;
+        }
+        $t = Bestand::form($titel);
+        if ($t !== '' && ($b === $t || str_starts_with($b, $t) || str_contains($t, $b))) {
+            return false;
+        }
+        return preg_match('/\b(altersfreigabe|kochshow|talkshow|magazin|serie)\b/u', $b) !== 1;
     }
 
     public static function mb(int $bytes): string

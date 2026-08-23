@@ -82,11 +82,23 @@ final class Analyse
         $treffer = [];
         $fast = [];
         $marken = [];
+        // Filmtreffer werden erst am Ende uebernommen: sie haengen daran, wie oft
+        // derselbe Titel im gelesenen Zeitraum ueberhaupt vorkommt.
+        $filmMarken = [];
+        $titelZahl = [];
         $z = ['geprueft' => 0, 'zugeordnet' => 0, 'ohne Favorit' => 0, 'Sender nicht empfangbar' => 0];
         $verworfeneSender = [];
 
         $vonLesen = ($markenVon > 0 && $markenVon < $von) ? $markenVon : $von;
         foreach ($leser->sendungen($vonLesen, $bis) as $s) {
+            // Der Filmbestand kennt nur Titel. Deshalb wird HIER gezaehlt, fuer
+            // jede Ausstrahlung, auch die vor dem Fenster: ein Titel, der im
+            // Zeitraum dutzendfach laeuft, ist eine Reihe und kein Film.
+            $tk = Bestand::form((string) $s['titel']);
+            if ($tk !== '') {
+                $titelZahl[$tk] = ($titelZahl[$tk] ?? 0) + 1;
+                $this->merkeFilm($filmMarken, $s, $tk);
+            }
             // Vor dem Entscheidungsfenster wird nur nachgeschlagen. Kein Urteil,
             // keine Kennzahl, keine Zeile in der Tabelle - was gelaufen ist, ist
             // gelaufen; interessant bleibt allein, ob es auf der Platte liegt.
@@ -199,6 +211,16 @@ final class Analyse
         }
         usort($treffer, static fn(array $a, array $b): int => $a['start'] <=> $b['start']);
 
+        // Jetzt erst die Filme: was im Zeitraum haeufig laeuft, ist eine Reihe,
+        // deren Titel zufaellig auch ueber einer einzelnen Aufnahme steht
+        // ("Silvia kocht"). Solche Treffer waeren keine Auskunft, sondern ein
+        // Dauerhaken ueber dem halben Raster.
+        foreach ($filmMarken as $schluessel => $titelSchluessel) {
+            if (!isset($marken[$schluessel]) && ($titelZahl[$titelSchluessel] ?? 0) <= self::FILM_HOECHSTENS) {
+                $marken[$schluessel] = 1;
+            }
+        }
+
         // Verworfene Sender nach Haeufigkeit: oben steht, was am meisten kostet.
         arsort($verworfeneSender);
         $offen = [];
@@ -216,6 +238,42 @@ final class Analyse
             'fastTreffer'  => self::naheDran($fast, $this->favoriten),
             'dauerMs'      => (int) round((microtime(true) - $t0) * 1000),
         ];
+    }
+
+    /**
+     * Wie oft ein Titel im gelesenen Zeitraum hoechstens laufen darf, damit ein
+     * Fund in der Filmablage noch als derselbe Film gilt. Vier Wiederholungen
+     * schafft ein Spielfilm ueber die Hauptsender leicht; ein Magazin liegt weit
+     * darueber.
+     */
+    private const FILM_HOECHSTENS = 4;
+
+    /**
+     * Liegt diese Ausstrahlung als Film in einer der flachen Ablagen?
+     *
+     * Anders als bei den Serien gibt es hier NUR den Titel zum Vergleichen.
+     * Darum zwei Schranken: die Ausstrahlung darf keine Folge sein - weder
+     * Untertitel noch Folgennummer - und der Titel darf im Zeitraum nicht
+     * staendig wiederkehren (das prueft der Aufrufer am Ende, siehe oben).
+     * Beides zusammen haelt "Terra X" und "Mein wunderbarer Kochsalon" drausen,
+     * deren einzelne Folgen jemand von Hand mitgeschnitten hat.
+     *
+     * @param array<string,string> $filmMarken "kanal|start" => Titelschluessel
+     * @param array<string,mixed>  $s
+     */
+    private function merkeFilm(array &$filmMarken, array $s, string $titelSchluessel): void
+    {
+        if ($this->bestand === null) {
+            return;
+        }
+        if (trim((string) $s['untertitel']) !== '' || trim((string) $s['folge']) !== '') {
+            return;
+        }
+        $kanal = trim((string) $s['kanal']);
+        if ($kanal === '' || !$this->bestand->sucheFilm((string) $s['titel'])['da']) {
+            return;
+        }
+        $filmMarken[$kanal . '|' . (int) $s['start']] = $titelSchluessel;
     }
 
     /**

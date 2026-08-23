@@ -15,6 +15,11 @@ namespace Hoep\SeriesRecorder;
  * andere im System UTF-8 ist. Wer das uebersieht, findet jede Folge mit Umlaut
  * nicht wieder und nimmt sie ein zweites Mal auf.
  *
+ * Aus den flachen Ablagen der von Hand mitgeschnittenen Filme kommt eine dritte
+ * Zeilenart - "0|#FILM|Titel|/mnt/Aufnahmen_Sabina/….ts". Sie fuehrt einen
+ * eigenen Index: dort gibt es keine Serie und keine Folgennummer, gesucht wird
+ * allein ueber den vollen Sendungstitel (siehe `sucheFilm`).
+ *
  * Gesucht wird ueber ZWEI Schluessel, und das ist kein Luxus: fuer 14 der 417
  * Ausstrahlungen liefert das EPG keine Staffel/Folge (S00E00). Ueber die
  * Nummer allein waeren sie unentscheidbar, ueber den Episodentitel sind sie es
@@ -28,7 +33,11 @@ final class Bestand
     /** @var array<string,list<string>> "serie|episodentitel" => Dateipfade */
     private array $nachTitel = [];
 
+    /** @var array<string,list<string>> "filmtitel" => Dateipfade (flache Ablagen) */
+    private array $nachFilm = [];
+
     private int $zeilen = 0;
+    private int $filmzeilen = 0;
 
     public function __construct(private string $datei)
     {
@@ -38,6 +47,30 @@ final class Bestand
     public function anzahl(): int
     {
         return $this->zeilen;
+    }
+
+    public function anzahlFilme(): int
+    {
+        return $this->filmzeilen;
+    }
+
+    /**
+     * Liegt dieser Film schon in einer der flachen Ablagen?
+     *
+     * Verglichen wird der GANZE Sendungstitel, nicht der Basisname: die Ablage
+     * kennt keine Serienstruktur, und "Jack Reacher" waere ein anderer Film als
+     * "Jack Reacher: Kein Weg zurueck". Sehr kurze Titel bleiben aussen vor -
+     * bei drei Zeichen traegt die Uebereinstimmung nichts.
+     *
+     * @return array{da:bool,dateien:list<string>}
+     */
+    public function sucheFilm(string $titel): array
+    {
+        $t = self::form($titel);
+        if ($t === '' || mb_strlen($t) < 5 || !isset($this->nachFilm[$t])) {
+            return ['da' => false, 'dateien' => []];
+        }
+        return ['da' => true, 'dateien' => $this->nachFilm[$t]];
     }
 
     /**
@@ -95,6 +128,16 @@ final class Bestand
             // Feld, das wie eine Nummer aussieht, die Serie steht immer an Position 2.
             $pfad  = (string) array_pop($f);
             $serie = (string) ($f[1] ?? '');
+            // Filmzeile: "lfd|#FILM|Titel|Pfad". Sie hat weder Serie noch Nummer,
+            // und ihr Titel darf auf keinen Fall in den Serienindex geraten.
+            if ($serie === '#FILM') {
+                $t = self::form((string) ($f[2] ?? ''));
+                if ($t !== '') {
+                    $this->nachFilm[$t][] = $pfad;
+                    $this->filmzeilen++;
+                }
+                continue;
+            }
             $s = self::form($serie);
             if ($s === '') {
                 continue;

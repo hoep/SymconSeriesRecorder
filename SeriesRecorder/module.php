@@ -99,6 +99,11 @@ class SeriesRecorder extends IPSModule
         // Bestandsscan: welche Aufnahmen liegen auf der Platte?
         $this->RegisterPropertyInteger('IntervallScan', 0);
         $this->RegisterPropertyString('Aufnahmepfade', '/mnt/Aufnahmen');
+        // Die von Hand mitgeschnittenen Filme liegen FLACH in eigenen Freigaben
+        // ("02 - Filme Sabina", "03 - Filme Peter" aus Sicht der Box). Dort gibt
+        // es keinen Serienordner und keine Folgennummer - der Scan liest sie
+        // deshalb getrennt und schreibt Filmzeilen.
+        $this->RegisterPropertyString('Filmpfade', '/mnt/Aufnahmen_Sabina,/mnt/Aufnahmen_Peter');
         $this->RegisterPropertyString('ScanZiel', 'recordings-sr.txt');
         // Untergrenze gegen den Fall einer nicht eingebundenen Freigabe: darunter
         // gilt der Scan als fehlgeschlagen und die alte Liste bleibt stehen.
@@ -511,6 +516,12 @@ class SeriesRecorder extends IPSModule
         if ($scharf && $e['ueberfluessig'] > 0 && ($e['verlaesslich'] ?? true)) {
             $weg = [];
             foreach ($e['gruppen'] as $g) {
+                // Filmgruppen sind ueber den Titel gebildet und koennen zwei
+                // verschiedene Filme gleichen Namens enthalten. Sie stehen in der
+                // Liste zum Nachsehen, werden aber nie von selbst geloescht.
+                if (!empty($g['unsicher'])) {
+                    continue;
+                }
                 foreach ($g['loeschen'] as $w) {
                     $weg[] = $w;
                 }
@@ -558,7 +569,8 @@ class SeriesRecorder extends IPSModule
         foreach ($e['gruppen'] as $g) {
             foreach ($g['loeschen'] as $w) {
                 $zeilen[] = [
-                    (string) $g['serie'], strtoupper((string) $g['nummer']), (string) $g['titel'],
+                    (string) $g['serie'] . (!empty($g['unsicher']) ? ' · pruefen' : ''),
+                    strtoupper((string) $g['nummer']), (string) $g['titel'],
                     self::kurzerName((string) $g['behalten']['pfad'], (string) $g['serie']),
                     Duplikate::mb((int) $g['behalten']['groesse']),
                     self::kurzerName((string) $w['pfad'], (string) $g['serie']),
@@ -883,6 +895,99 @@ class SeriesRecorder extends IPSModule
      *
      * @return array{ok:bool,meldung:string}
      */
+    /** Kommaliste aus dem Formular in saubere Pfade. */
+    private static function pfadliste(string $roh): array
+    {
+        return array_values(array_filter(array_map('trim', explode(',', $roh))));
+    }
+
+    /**
+     * Haengt die Aufnahmefreigaben ein, soweit noetig.
+     *
+     * Anders als das pauschale `mount -a` weiter unten arbeitet das hier
+     * gezielt: eingehaengt wird nur, was in der fstab steht und in /proc/mounts
+     * FEHLT. Ein Verzeichnis ohne fstab-Eintrag ist ein oertlicher Ordner und
+     * wird in Ruhe gelassen - dort waere ein Einhaengeversuch nur eine
+     * Fehlermeldung. Aufgerufen wird das VOR dem Scan, denn ein leerer
+     * Einhaengepunkt liest sich wie eine geleerte Platte.
+     *
+     * @param list<string> $pfade
+     * @return string Meldung fuer die Statuszeile, leer wenn alles schon hing
+     */
+    private function stelleFreigabenBereit(array $pfade): string
+    {
+        if ($pfade === [] || !$this->ReadPropertyBoolean('FreigabeEinbinden')) {
+            return '';
+        }
+        $haengt = self::einhaengepunkte('/proc/mounts');
+        $bekannt = self::einhaengepunkte('/etc/fstab');
+        $getan = [];
+        $offen = [];
+        foreach ($pfade as $p) {
+            $ziel = rtrim($p, '/');
+            if ($ziel === '' || isset($haengt[$ziel])) {
+                continue;
+            }
+            if (!isset($bekannt[$ziel])) {
+                // Kein Einhaengepunkt: nur melden, wenn es den Ordner auch nicht gibt.
+                if (!is_dir($ziel)) {
+                    $offen[] = basename($ziel) . ' (kein Ordner, kein fstab-Eintrag)';
+                }
+                continue;
+            }
+            if (!function_exists('shell_exec')) {
+                $offen[] = basename($ziel) . ' (shell_exec fehlt)';
+                continue;
+            }
+            // Erst ohne sudo - als root ist das der Normalfall -, bei einem
+            // Rechtefehler einmal mit. Dieselbe Reihenfolge wie bei 'mount -a'.
+            $aus = trim((string) @shell_exec('mount ' . escapeshellarg($ziel) . ' 2>&1'));
+            if (preg_match('/permission denied|not permitted|only root|must be superuser/i', $aus) === 1) {
+                $aus = trim((string) @shell_exec('sudo -n mount ' . escapeshellarg($ziel) . ' 2>&1'));
+            }
+            sleep(1);
+            $jetzt = self::einhaengepunkte('/proc/mounts');
+            if (isset($jetzt[$ziel])) {
+                $getan[] = basename($ziel);
+            } else {
+                $offen[] = basename($ziel) . ($aus !== '' ? ': ' . mb_substr($aus, 0, 80) : '');
+            }
+        }
+        $m = [];
+        if ($getan !== []) {
+            $m[] = 'eingehaengt: ' . implode(', ', $getan);
+        }
+        if ($offen !== []) {
+            $m[] = 'nicht eingehaengt: ' . implode(', ', $offen);
+        }
+        return implode(' · ', $m);
+    }
+
+    /**
+     * Die Einhaengeziele aus /proc/mounts oder /etc/fstab.
+     *
+     * Beide Dateien haben dasselbe Spaltenformat und maskieren Leerzeichen im
+     * Pfad als \040 - unmaskiert waere "/mnt/Filme Sabina" zwei Felder.
+     *
+     * @return array<string,true>
+     */
+    private static function einhaengepunkte(string $datei): array
+    {
+        $out = [];
+        foreach (@file($datei, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [] as $zeile) {
+            $zeile = trim((string) $zeile);
+            if ($zeile === '' || $zeile[0] === '#') {
+                continue;
+            }
+            $f = preg_split('/\s+/', $zeile) ?: [];
+            $ziel = rtrim(stripcslashes((string) ($f[1] ?? '')), '/');
+            if ($ziel !== '' && str_starts_with($ziel, '/')) {
+                $out[$ziel] = true;
+            }
+        }
+        return $out;
+    }
+
     private function bindeFreigabeEin(): array
     {
         if (!$this->ReadPropertyBoolean('FreigabeEinbinden')) {
@@ -914,10 +1019,14 @@ class SeriesRecorder extends IPSModule
      */
     public function ScanneBestand(): string
     {
-        $pfade = array_values(array_filter(array_map('trim',
-            explode(',', $this->ReadPropertyString('Aufnahmepfade')))));
+        $pfade = self::pfadliste($this->ReadPropertyString('Aufnahmepfade'));
+        $filme = self::pfadliste($this->ReadPropertyString('Filmpfade'));
+        // Erst schauen, ob die Freigaben ueberhaupt haengen. Ein Scan auf einem
+        // leeren Einhaengepunkt findet null Dateien und sieht aus wie ein
+        // geleerter Bestand - die Ursache steht dann nirgends.
+        $bereit = $this->stelleFreigabenBereit(array_merge($pfade, $filme));
         $s = new Bestandsscan($pfade, ['ts', 'mkv', 'mp4'],
-            max(1, $this->ReadPropertyInteger('ScanMindestens')));
+            max(1, $this->ReadPropertyInteger('ScanMindestens')), $filme);
         $serienDatei = rtrim($this->ReadPropertyString('Datenpfad'), '/') . '/serien-sr.txt';
         $e = $s->lauf($this->pfad('ScanZiel'), $serienDatei);
 
@@ -929,15 +1038,16 @@ class SeriesRecorder extends IPSModule
             $m = $this->bindeFreigabeEin();
             if ($m['ok']) {
                 $s2 = new Bestandsscan($pfade, ['ts', 'mkv', 'mp4'],
-                    max(1, $this->ReadPropertyInteger('ScanMindestens')));
+                    max(1, $this->ReadPropertyInteger('ScanMindestens')), $filme);
                 $e = $s2->lauf($this->pfad('ScanZiel'), $serienDatei);
                 $nachgefasst = ' · nach ' . $m['meldung'] . ' erneut versucht';
             } else {
                 $nachgefasst = ' · ' . $m['meldung'];
             }
         }
-        $this->SetValue('Bestand', sprintf('%s · %s · %d Aufnahmen, %d Serien · %.1f s%s',
-            date('d.m. H:i'), $e['meldung'], $e['dateien'], $e['serien'], $e['dauerMs'] / 1000, $nachgefasst));
+        $this->SetValue('Bestand', sprintf('%s · %s · %d Aufnahmen, %d Serien, %d Filme · %.1f s%s%s',
+            date('d.m. H:i'), $e['meldung'], $e['dateien'], $e['serien'], (int) ($e['filme'] ?? 0),
+            $e['dauerMs'] / 1000, $bereit === '' ? '' : ' · ' . $bereit, $nachgefasst));
         // Nur bei einem gelungenen Scan schreiben: eine haengende Freigabe meldet
         // null Dateien, und eine Null in einer aufgezeichneten Reihe sieht spaeter
         // aus wie ein geleerter Bestand.
@@ -1177,7 +1287,11 @@ class SeriesRecorder extends IPSModule
                 ['type' => 'NumberSpinner', 'name' => 'IntervallWunsch', 'caption' => 'Wunschliste holen (Minuten)', 'minimum' => 0, 'maximum' => 10080],
                 ['type' => 'NumberSpinner', 'name' => 'IntervallScan', 'caption' => 'Bestand scannen (Minuten)', 'minimum' => 0, 'maximum' => 10080],
                 ['type' => 'NumberSpinner', 'name' => 'IntervallDuplikate', 'caption' => 'Duplikate pruefen (Minuten)', 'minimum' => 0, 'maximum' => 10080],
-                ['type' => 'ValidationTextBox', 'name' => 'Aufnahmepfade', 'caption' => 'Aufnahmeverzeichnisse (mit Komma trennen)'],
+                ['type' => 'ValidationTextBox', 'name' => 'Aufnahmepfade', 'caption' => 'Serienverzeichnisse (mit Komma trennen)'],
+                ['type' => 'ValidationTextBox', 'name' => 'Filmpfade', 'caption' => 'Filmverzeichnisse, flach (mit Komma trennen)'],
+                ['type' => 'Label', 'caption' => 'Serienverzeichnisse haben je Serie einen Ordner. Filmverzeichnisse sind flach: eine Datei je Aufnahme, '
+                    . 'der Titel steht im Namen. Von dort gibt es keine Aufnahmeentscheidung - die Filme werden im Programm nur als vorhanden markiert '
+                    . 'und in der Duplikatliste vorgeschlagen. Nicht eingehaengte Freigaben werden vor dem Scan eingehaengt, sofern sie in der fstab stehen.'],
                 ['type' => 'ValidationTextBox', 'name' => 'ScanZiel', 'caption' => 'Bestandsliste (eigene)'],
                 ['type' => 'NumberSpinner', 'name' => 'ScanMindestens', 'caption' => 'Weniger Funde = Scan gilt als fehlgeschlagen', 'minimum' => 1, 'maximum' => 100000],
                 ['type' => 'CheckBox', 'name' => 'FreigabeEinbinden', 'caption' => 'Bei zu wenigen Funden "mount -a" versuchen und einmal nachfassen'],
