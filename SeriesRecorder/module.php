@@ -1575,19 +1575,32 @@ class SeriesRecorder extends IPSModule
             }
             $marken[$k . '|' . (int) $s['start']] = $u === 'mehrfach' ? 2 : 1;
         }
-        // Die ermittelte Nummer gleich mitgeben. Das EPG zeigt sonst die des
-        // XMLTV, und die ist bei den Krimireihen entweder gar keine oder eine
-        // laufende Nummer ohne Staffel - "E1245" statt "S2024E21". Ermittelt
-        // wird sie ohnehin, nur wusste bisher niemand ausserhalb davon.
+        // Nummer, Serienname und Episodentitel gleich mitgeben - alles drei so,
+        // wie die Aufnahme auf der Platte heisst.
+        //
+        // Das EPG kennt diese Namen nicht. Es schreibt "Tatort: Trotzdem" und
+        // "Der Wien-Krimi: Blind ermittelt" in EINEN Titel, waehrend die Ablage
+        // "Tatort" mit der Folge "Voss - 10 - Trotzdem" und die Serie "Blind
+        // ermittelt" fuehrt; "CSI: Miami" liegt unter "CSI Miami". Ermittelt
+        // wird das alles ohnehin fuer den Bestandsabgleich - nur wusste bisher
+        // niemand ausserhalb davon.
+        //
+        // Ein Eintrag je Ausstrahlung: [Nummer, Serie, Episodentitel].
         foreach ($sendungen as $s) {
             $k = trim((string) ($s['kanalId'] ?? ''));
-            $nr = (string) ($s['staffelFolge'] ?? '');
-            if ($k !== '' && $nr !== '') {
-                $nummern[$k . '|' . (int) $s['start']] = $nr;
+            if ($k === '') {
+                continue;
             }
+            $nr = (string) ($s['staffelFolge'] ?? '');
+            $serie = (string) ($s['serie'] ?? '');
+            $ep = (string) ($s['titel'] ?? '');
+            if ($nr === '' && $serie === '' && $ep === '') {
+                continue;
+            }
+            $nummern[$k . '|' . (int) $s['start']] = [$nr, $serie, $ep];
         }
         return (string) json_encode(['stand' => time(), 'anzahl' => count($marken),
-                                     'marken' => $marken, 'nummern' => $nummern],
+                                     'marken' => $marken, 'sendungen' => $nummern],
                                     JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     }
 
