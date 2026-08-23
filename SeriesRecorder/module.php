@@ -1559,10 +1559,18 @@ class SeriesRecorder extends IPSModule
             }
             $u = (string) ($s['urteil'] ?? '');
             if ($u !== 'vorhanden' && $u !== 'mehrfach') {
-                // Der Entscheider hat geurteilt und sagt: liegt NICHT da. Dann
-                // zaehlt das - auch gegen einen Nachschlag, der nur Name und
-                // Nummer vergleicht.
-                unset($marken[$k . '|' . (int) $s['start']]);
+                // Nur EIN Urteil ist eine Aussage ueber die Platte: "aufnehmen"
+                // heisst, der Entscheider hat im Bestand nachgesehen und nichts
+                // gefunden. Das zaehlt auch gegen den Nachschlag, der nur Name
+                // und Nummer vergleicht.
+                //
+                // "ausgeschlossen", "unklar" und "programmiert" sagen dagegen gar
+                // nichts darueber. Der Tatort von 2019 faellt aus der Schranke
+                // "season >= 2024" - er liegt trotzdem auf der Platte, und genau
+                // das will man im Raster sehen.
+                if ($u === 'aufnehmen') {
+                    unset($marken[$k . '|' . (int) $s['start']]);
+                }
                 continue;
             }
             $marken[$k . '|' . (int) $s['start']] = $u === 'mehrfach' ? 2 : 1;

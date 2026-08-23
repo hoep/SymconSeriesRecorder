@@ -143,6 +143,14 @@ final class Analyse
             ]);
             if ($u !== null) {
                 $z[$u['urteil']] = ($z[$u['urteil']] ?? 0) + 1;
+                // "ausgeschlossen", "unklar" und "programmiert" sagen nichts
+                // darueber, ob die Folge auf der Platte liegt - der Entscheider
+                // steigt vorher aus. Also nachschlagen, und zwar mit SEINER
+                // Nummer: der Tatort von 2019 faellt aus der Schranke
+                // "season >= 2024" und liegt trotzdem im Bestand.
+                if (!in_array($u['urteil'], ['vorhanden', 'mehrfach', 'aufnehmen'], true)) {
+                    $this->merkeBestand($marken, $s, $t, $u);
+                }
             }
             $treffer[] = [
                 'kanal'  => $kanal[$s['kanal']],
@@ -201,8 +209,10 @@ final class Analyse
      * @param array<string,int> $marken
      * @param array<string,mixed> $s Ausstrahlung aus dem XMLTV-Leser
      * @param ?array{ablage:string} $t Auflösung des Resolvers, null = kein Favorit
+     * @param ?array{staffel:int,folge:int} $u Urteil des Entscheiders, wenn es eines gibt -
+     *        seine Nummer ist die bessere, sie kommt aus dem Episodenkatalog
      */
-    private function merkeBestand(array &$marken, array $s, ?array $t): void
+    private function merkeBestand(array &$marken, array $s, ?array $t, ?array $u = null): void
     {
         if ($this->bestand === null) {
             return;
@@ -221,8 +231,16 @@ final class Analyse
         if ($serie === '') {
             return;
         }
-        $n = EpisodenNummer::bestimme((string) $s['folge'], (string) $s['titel'], (string) $s['untertitel']);
-        if ($this->bestand->suche($serie, $n['staffel'], $n['folge'], (string) $s['untertitel'])['da']) {
+        if ($u !== null) {
+            $st = (int) $u['staffel'];
+            $fo = (int) $u['folge'];
+        } else {
+            $n = EpisodenNummer::bestimme((string) $s['folge'], (string) $s['titel'], (string) $s['untertitel']);
+            $st = $n['staffel'];
+            $fo = $n['folge'];
+        }
+        $eptitel = $s['untertitel'] !== '' ? (string) $s['untertitel'] : ($t !== null ? (string) $t['zusatz'] : '');
+        if ($this->bestand->suche($serie, $st, $fo, $eptitel)['da']) {
             $marken[$schluessel] = 1;
         }
     }
