@@ -162,6 +162,20 @@ final class Analyse
                     ? (string) $s['untertitel']
                     : trim((string) preg_replace('/^\s*(?::|[–—-])\s*/u', '', (string) $t['zusatz']));
             }
+            // Inhaltsangabe nachreichen, wo das EPG keine hat. Fuenfzehn Prozent der
+            // Ausstrahlungen kommen ohne Text daher; beim Anklicken stand dort ein
+            // leeres Feld, obwohl TheTVDB die Handlung kennt. Nur DANN - eine
+            // vorhandene Angabe des Senders bleibt, sie beschreibt genau diese
+            // Ausstrahlung (Erstausstrahlung, Fassung, Laenge).
+            $inhalt = '';
+            if ($u !== null && $this->katalog !== null
+                && trim((string) ($s['beschreibung'] ?? '')) === ''
+                && method_exists($this->katalog, 'inhalt')) {
+                $inhalt = (string) $this->katalog->inhalt($t['ablage'], (int) $u['staffel'], (int) $u['folge']);
+                if (mb_strlen($inhalt) > 600) {
+                    $inhalt = rtrim(mb_substr($inhalt, 0, 599)) . '…';
+                }
+            }
             $treffer[] = [
                 'kanal'  => $kanal[$s['kanal']],
                 // Die XMLTV-Kennung des Senders unveraendert mitnehmen. Der
@@ -180,6 +194,7 @@ final class Analyse
                 'grund'  => $u['grund'] ?? '',
                 'staffelFolge' => ($u !== null && ($u['staffel'] > 0 || $u['folge'] > 0))
                                     ? Bestand::nummer($u['staffel'], $u['folge']) : '',
+                'inhalt' => $inhalt,
             ];
         }
         usort($treffer, static fn(array $a, array $b): int => $a['start'] <=> $b['start']);

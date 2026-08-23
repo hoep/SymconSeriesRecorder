@@ -59,6 +59,24 @@ final class Episodenkatalog implements EpisodenQuelle
     /** @var array<string,string> "serie|S01E02" => Episodentitel der Quelle */
     private array $nachNummer = [];
 
+    /**
+     * Woher die Episoden einer Serie stammen: [Format, Datei].
+     *
+     * Gebraucht fuer die Inhaltsangaben. Die stehen in denselben Dateien, sind
+     * aber zusammen elf Megabyte - sie bei jedem Lauf mitzuladen hiesse, fuer
+     * ein paar Dutzend Texte siebzehntausend vorzuhalten. Deshalb wird die Datei
+     * gemerkt und erst gelesen, wenn wirklich jemand nach einem Inhalt fragt.
+     *
+     * @var array<string,array{0:string,1:string}>
+     */
+    private array $herkunft = [];
+
+    /** @var array<string,bool> Serien, deren Inhaltsangaben schon geladen sind */
+    private array $inhaltGeladen = [];
+
+    /** @var array<string,string> "serie|S01E02" => Inhaltsangabe */
+    private array $inhalte = [];
+
     private int $serien = 0;
     private int $episoden = 0;
 
@@ -153,6 +171,65 @@ final class Episodenkatalog implements EpisodenQuelle
         return $this->nachNummer[$s . '|' . Bestand::nummer($staffel, $folge)] ?? '';
     }
 
+    /**
+     * Die Inhaltsangabe zu einer Folge - fuer Sendungen, zu denen das EPG keine
+     * hergibt.
+     *
+     * Fuenfzehn Prozent der Ausstrahlungen kommen ohne Text daher, und beim
+     * Anklicken steht dann ein leeres Feld. TheTVDB kennt die Handlung meist
+     * trotzdem; sie liegt in derselben Datei, aus der auch Staffel und Folge
+     * kommen.
+     *
+     * Geladen wird je Serie und erst auf Nachfrage - siehe $herkunft.
+     */
+    public function inhalt(string $serie, int $staffel, int $folge): string
+    {
+        $s = Bestand::form($serie);
+        if ($s === '' || ($staffel === 0 && $folge === 0) || !isset($this->herkunft[$s])) {
+            return '';
+        }
+        if (!isset($this->inhaltGeladen[$s])) {
+            $this->inhaltGeladen[$s] = true;
+            $this->ladeInhalte($s);
+        }
+        return $this->inhalte[$s . '|' . Bestand::nummer($staffel, $folge)] ?? '';
+    }
+
+    private function ladeInhalte(string $s): void
+    {
+        [$format, $ort] = $this->herkunft[$s];
+        // Die Dumps tragen ein fehlendes Feld als leeres OBJEKT, nicht als leeren
+        // String - ungeprueft gibt das eine Warnung je Folge.
+        $merke = function (int $st, int $fo, mixed $roh) use ($s): void {
+            $text = is_string($roh) ? trim($roh) : '';
+            if ($text === '') {
+                return;
+            }
+            $this->inhalte[$s . '|' . Bestand::nummer($st, $fo)] ??= $text;
+        };
+        if ($format === 'A') {
+            foreach ((self::json($ort)['Episode'] ?? []) as $e) {
+                $merke((int) ($e['SeasonNumber'] ?? 0), (int) ($e['EpisodeNumber'] ?? 0), $e['Overview'] ?? '');
+            }
+            return;
+        }
+        if ($format === 'B') {
+            foreach (self::json($ort) as $e) {
+                if (is_array($e)) {
+                    $merke((int) ($e['airedSeason'] ?? 0), (int) ($e['airedEpisodeNumber'] ?? 0), $e['overview'] ?? '');
+                }
+            }
+            return;
+        }
+        foreach (glob($ort . '/season_*/episode_*.json') ?: [] as $ep) {
+            if (!preg_match('#/season_(\d+)/episode_(\d+)\.json$#', $ep, $m)) {
+                continue;
+            }
+            $e = self::json($ep);
+            $merke((int) $m[1], (int) ($e['episode_number'] ?? $m[2]), $e['overview'] ?? '');
+        }
+    }
+
     /** Vergleichsform ohne abschliessenden Klammerzusatz. */
     private static function ohneKlammer(string $titel): string
     {
@@ -178,6 +255,7 @@ final class Episodenkatalog implements EpisodenQuelle
                 continue;
             }
             $this->vonTvdb[Bestand::form($name)] = true;
+            $this->herkunft[Bestand::form($name)] ??= ['A', $datei];
             foreach ($liste as $e) {
                 $this->merke($name, (string) ($e['EpisodeName'] ?? ''),
                     (int) ($e['SeasonNumber'] ?? 0), (int) ($e['EpisodeNumber'] ?? 0));
@@ -204,6 +282,7 @@ final class Episodenkatalog implements EpisodenQuelle
                 continue;   // ohne Serienname ist der Eintrag nicht zuzuordnen
             }
             $this->vonTvdb[Bestand::form($name)] = true;
+            $this->herkunft[Bestand::form($name)] ??= ['B', $datei];
             $liste = self::json($datei);
             if (!is_array($liste)) {
                 continue;
@@ -232,6 +311,9 @@ final class Episodenkatalog implements EpisodenQuelle
                     continue;
                 }
                 $ordner = dirname($datei);
+                if (!isset($this->vonTvdb[Bestand::form($name)])) {
+                    $this->herkunft[Bestand::form($name)] ??= ['C', $ordner];
+                }
                 foreach (glob($ordner . '/season_*/episode_*.json') ?: [] as $ep) {
                     if (!preg_match('#/season_(\d+)/episode_(\d+)\.json$#', $ep, $m)) {
                         continue;

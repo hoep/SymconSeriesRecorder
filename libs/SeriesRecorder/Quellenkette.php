@@ -69,6 +69,21 @@ final class Quellenkette implements EpisodenQuelle
         return '';
     }
 
+    /** Die Inhaltsangabe zu einer Folge - bei der ersten Quelle, die sie kennt. */
+    public function inhalt(string $serie, int $staffel, int $folge): string
+    {
+        foreach ($this->quellen as $q) {
+            if (!method_exists($q, 'inhalt')) {
+                continue;
+            }
+            $t = (string) $q->inhalt($serie, $staffel, $folge);
+            if ($t !== '') {
+                return $t;
+            }
+        }
+        return '';
+    }
+
     public function bericht(): string
     {
         return implode(' | ', array_map(static fn(EpisodenQuelle $q): string => $q->bericht(), $this->quellen));

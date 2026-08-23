@@ -1585,7 +1585,8 @@ class SeriesRecorder extends IPSModule
         // wird das alles ohnehin fuer den Bestandsabgleich - nur wusste bisher
         // niemand ausserhalb davon.
         //
-        // Ein Eintrag je Ausstrahlung: [Nummer, Serie, Episodentitel].
+        // Ein Eintrag je Ausstrahlung: [Nummer, Serie, Episodentitel] - und, wo das
+        // EPG keine Inhaltsangabe hat, als vierter Platz die von TheTVDB.
         foreach ($sendungen as $s) {
             $k = trim((string) ($s['kanalId'] ?? ''));
             if ($k === '') {
@@ -1594,10 +1595,15 @@ class SeriesRecorder extends IPSModule
             $nr = (string) ($s['staffelFolge'] ?? '');
             $serie = (string) ($s['serie'] ?? '');
             $ep = (string) ($s['titel'] ?? '');
-            if ($nr === '' && $serie === '' && $ep === '') {
+            $inhalt = (string) ($s['inhalt'] ?? '');
+            if ($nr === '' && $serie === '' && $ep === '' && $inhalt === '') {
                 continue;
             }
-            $nummern[$k . '|' . (int) $s['start']] = [$nr, $serie, $ep];
+            // Der vierte Platz bleibt leer, wo das EPG selbst etwas zu sagen hat -
+            // sonst traegt die Variable ein halbes Megabyte Text, das niemand liest.
+            $nummern[$k . '|' . (int) $s['start']] = $inhalt === ''
+                ? [$nr, $serie, $ep]
+                : [$nr, $serie, $ep, $inhalt];
         }
         return (string) json_encode(['stand' => time(), 'anzahl' => count($marken),
                                      'marken' => $marken, 'sendungen' => $nummern],
