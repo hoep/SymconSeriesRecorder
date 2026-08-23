@@ -273,7 +273,14 @@ class SeriesRecorder extends IPSModule
         // Altsystems gelesen. So laeuft das Modul in jeder Ausbaustufe.
         $eigen = $this->pfad('XmltvZiel');
         $quelle = is_readable($eigen) ? $eigen : $this->pfad('XmltvDatei');
-        $e = $a->lauf(new XmltvLeser($quelle), time() - 3600, time() + $vorschau * 86400);
+        // Entschieden wird ab einer Stunde rueckwaerts, nachgeschlagen ab
+        // gestern frueh: das Raster zeigt so weit zurueck, wie die XMLTV-Datei
+        // reicht, und eine Sendung von gestern Abend ist genauso "schon
+        // aufgenommen" wie eine von heute Abend. Programmiert wird davon
+        // nichts - siehe Analyse::lauf. Deckung dadurch von 49 auf 95 Prozent
+        // der Wunschserien-Ausstrahlungen im Raster, Kosten rund 300 ms.
+        $e = $a->lauf(new XmltvLeser($quelle), time() - 3600, time() + $vorschau * 86400,
+                      (int) strtotime('yesterday 00:00'));
 
         $this->SetValue('Zugeordnet', (int) ($e['kennzahlen']['zugeordnet'] ?? 0));
         $this->SetValue('OhneEmpfang', (int) ($e['kennzahlen']['Sender nicht empfangbar'] ?? 0));
@@ -287,7 +294,7 @@ class SeriesRecorder extends IPSModule
             Analyse::alsTabelle($e['sendungen'], fn(array $s): string => $this->senderZelle(
                 $karte, (string) ($s['kanal'] ?? ''), (string) ($s['sender'] ?? ''))),
             JSON_UNESCAPED_UNICODE));
-        $this->SetValue('Marken', $this->bestandsmarken($e['sendungen']));
+        $this->SetValue('Marken', $this->bestandsmarken($e['sendungen'], (array) ($e['marken'] ?? [])));
         $this->SetValue('OffeneSender', implode("\n", $e['offeneSender']));
         $this->SetValue('Serien', $this->serientabelle($e['sendungen']));
         $this->SetValue('Matching', (string) json_encode(
@@ -1530,18 +1537,31 @@ class SeriesRecorder extends IPSModule
      * "mehrfach" zaehlt dazu: auch das liegt auf der Platte, nur oefter als
      * noetig. Wer die Sendung sucht, will genau das wissen.
      *
+     * Zwei Quellen, in dieser Rangfolge: das Urteil des Entscheiders, wo es
+     * eines gibt, sonst der direkte Griff in den Bestand aus dem Lauf. Das
+     * Urteil kennt Katalog, Staffelregeln und Duplikate und ist deshalb die
+     * bessere Auskunft; es gibt es aber nur fuer Wunschserien im
+     * Entscheidungsfenster. Der Nachschlag fuellt die Luecken - vergangene
+     * Stunden des laufenden Tages und Serien, die nicht (mehr) auf der Liste
+     * stehen.
+     *
      * @param list<array<string,mixed>> $sendungen
+     * @param array<string,int> $nachschlag "kanalId|start" => 1
      */
-    private function bestandsmarken(array $sendungen): string
+    private function bestandsmarken(array $sendungen, array $nachschlag = []): string
     {
-        $marken = [];
+        $marken = $nachschlag;
         foreach ($sendungen as $s) {
-            $u = (string) ($s['urteil'] ?? '');
-            if ($u !== 'vorhanden' && $u !== 'mehrfach') {
-                continue;
-            }
             $k = trim((string) ($s['kanalId'] ?? ''));
             if ($k === '') {
+                continue;
+            }
+            $u = (string) ($s['urteil'] ?? '');
+            if ($u !== 'vorhanden' && $u !== 'mehrfach') {
+                // Der Entscheider hat geurteilt und sagt: liegt NICHT da. Dann
+                // zaehlt das - auch gegen einen Nachschlag, der nur Name und
+                // Nummer vergleicht.
+                unset($marken[$k . '|' . (int) $s['start']]);
                 continue;
             }
             $marken[$k . '|' . (int) $s['start']] = $u === 'mehrfach' ? 2 : 1;

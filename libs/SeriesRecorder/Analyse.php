@@ -9,6 +9,7 @@ require_once __DIR__ . '/KanalMapper.php';
 require_once __DIR__ . '/XmltvLeser.php';
 require_once __DIR__ . '/Entscheidung.php';
 require_once __DIR__ . '/Receiver.php';
+require_once __DIR__ . '/EpisodenNummer.php';
 
 /**
  * Der lesende Durchlauf: welche Ausstrahlungen der Wunschliste stehen an?
@@ -43,10 +44,17 @@ final class Analyse
      *   sendungen:list<array{kanal:string,sender:string,serie:string,titel:string,start:int,ende:int,folge:string}>,
      *   kennzahlen:array<string,int|string>,
      *   offeneSender:list<string>,
+     *   marken:array<string,int>,
      *   dauerMs:int
      * }
+     *
+     * $markenVon zieht NUR das Nachschlagen im Bestand weiter zurueck, nicht das
+     * Urteil: der Programmfuehrer zeigt den ganzen laufenden Tag, entschieden
+     * wird aber weiterhin erst ab $von. Sonst stuende die halbe Vormittagsware
+     * mit dem Urteil "aufnehmen" da - und der Programmierlauf, der genau danach
+     * greift, wuerde Timer fuer Vergangenes setzen.
      */
-    public function lauf(XmltvLeser $leser, int $von = 0, int $bis = 0): array
+    public function lauf(XmltvLeser $leser, int $von = 0, int $bis = 0, int $markenVon = 0): array
     {
         $t0 = microtime(true);
         $resolver = new TitelResolver($this->favoriten, $this->aliase);
@@ -73,14 +81,27 @@ final class Analyse
 
         $treffer = [];
         $fast = [];
+        $marken = [];
         $z = ['geprueft' => 0, 'zugeordnet' => 0, 'ohne Favorit' => 0, 'Sender nicht empfangbar' => 0];
         $verworfeneSender = [];
 
-        foreach ($leser->sendungen($von, $bis) as $s) {
+        $vonLesen = ($markenVon > 0 && $markenVon < $von) ? $markenVon : $von;
+        foreach ($leser->sendungen($vonLesen, $bis) as $s) {
+            // Vor dem Entscheidungsfenster wird nur nachgeschlagen. Kein Urteil,
+            // keine Kennzahl, keine Zeile in der Tabelle - was gelaufen ist, ist
+            // gelaufen; interessant bleibt allein, ob es auf der Platte liegt.
+            if ($s['start'] < $von) {
+                $this->merkeBestand($marken, $s, $resolver->bestimme($s['titel']));
+                continue;
+            }
             $z['geprueft']++;
             $t = $resolver->bestimme($s['titel']);
             if ($t === null) {
                 $z['ohne Favorit']++;
+                // Auch was nicht auf der Wunschliste steht, kann laengst auf der
+                // Platte liegen - eine abgesetzte Serie, eine, die man von Hand
+                // mitgenommen hat. Fuer das Raster ist das dieselbe Auskunft.
+                $this->merkeBestand($marken, $s, null);
                 // Unzugeordnete Titel sammeln - nach BASISNAMEN, nicht je
                 // Ausstrahlung. Zwoelftausend Zeilen sind keine Auskunft; die
                 // paar hundert verschiedenen Namen dahinter sind eine.
@@ -147,6 +168,7 @@ final class Analyse
 
         return [
             'sendungen'    => $treffer,
+            'marken'       => $marken,
             'kennzahlen'   => $z + ['Serien mit Ausstrahlung' => count(array_unique(array_column($treffer, 'serie')))],
             'offeneSender' => $offen,
             'quellen'      => trim(($this->katalog?->bericht() ?? '')
@@ -154,6 +176,48 @@ final class Analyse
             'fastTreffer'  => self::naheDran($fast, $this->favoriten),
             'dauerMs'      => (int) round((microtime(true) - $t0) * 1000),
         ];
+    }
+
+    /**
+     * Nachschlagen statt urteilen: liegt diese Ausstrahlung schon auf der Platte?
+     *
+     * Das Urteil des Entscheiders ist die bessere Auskunft - es kennt den
+     * Episodenkatalog, die Staffelregeln und die Duplikate. Es gibt es aber nur
+     * fuer Wunschserien im Entscheidungsfenster. Ueberall sonst bleibt der
+     * direkte Griff in den Bestand: Serienname plus Nummer, ersatzweise plus
+     * Episodentitel.
+     *
+     * Geraten wird auch hier nicht. Ohne Nummer UND ohne Episodentitel gibt es
+     * keine Marke - ein Spielfilm, der zufaellig so heisst wie eine Serie im
+     * Bestand, waere sonst "schon aufgenommen".
+     *
+     * @param array<string,int> $marken
+     * @param array<string,mixed> $s Ausstrahlung aus dem XMLTV-Leser
+     * @param ?array{ablage:string} $t Auflösung des Resolvers, null = kein Favorit
+     */
+    private function merkeBestand(array &$marken, array $s, ?array $t): void
+    {
+        if ($this->bestand === null) {
+            return;
+        }
+        $kanal = trim((string) $s['kanal']);
+        if ($kanal === '') {
+            return;
+        }
+        $schluessel = $kanal . '|' . (int) $s['start'];
+        if (isset($marken[$schluessel])) {
+            return;
+        }
+        // Der Ablagename, nicht der Anzeigename: "CSI: Miami" liegt unter
+        // "CSI Miami". Ohne Favorit bleibt der Basisname des Titels.
+        $serie = $t !== null ? (string) $t['ablage'] : trim(TitelResolver::zerlege((string) $s['titel'])[0]);
+        if ($serie === '') {
+            return;
+        }
+        $n = EpisodenNummer::bestimme((string) $s['folge'], (string) $s['titel'], (string) $s['untertitel']);
+        if ($this->bestand->suche($serie, $n['staffel'], $n['folge'], (string) $s['untertitel'])['da']) {
+            $marken[$schluessel] = 1;
+        }
     }
 
     /**
