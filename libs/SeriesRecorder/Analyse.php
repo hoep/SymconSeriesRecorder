@@ -217,7 +217,11 @@ final class Analyse
         // Dauerhaken ueber dem halben Raster.
         foreach ($filmMarken as $schluessel => $titelSchluessel) {
             if (!isset($marken[$schluessel]) && ($titelZahl[$titelSchluessel] ?? 0) <= self::FILM_HOECHSTENS) {
-                $marken[$schluessel] = 1;
+                // Eigener Wert, nicht die 1 der Serien: der Fund kommt aus einer
+                // flachen Filmablage und steht allein auf dem Titel. Das Raster
+                // faerbt ihn anders, damit man beim Hinsehen weiss, worauf die
+                // Aussage beruht.
+                $marken[$schluessel] = 3;
             }
         }
 

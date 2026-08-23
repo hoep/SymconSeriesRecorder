@@ -1687,6 +1687,9 @@ class SeriesRecorder extends IPSModule
                 }
                 continue;
             }
+            // 1 = liegt da, 2 = liegt mehrfach da. Die 3 der Filmablagen kommt
+            // aus dem Nachschlag und wird hier nie gesetzt: was ein Urteil hat,
+            // ist eine Serienfolge.
             $marken[$k . '|' . (int) $s['start']] = $u === 'mehrfach' ? 2 : 1;
         }
         // Nummer, Serienname und Episodentitel gleich mitgeben - alles drei so,
