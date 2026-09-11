@@ -90,7 +90,27 @@ final class Analyse
         $verworfeneSender = [];
 
         $vonLesen = ($markenVon > 0 && $markenVon < $von) ? $markenVon : $von;
+
+        // CHRONOLOGISCH entscheiden, nicht in der Reihenfolge der XMLTV-Datei.
+        //
+        // Der Entscheider vergibt "mehrfach" an jede Ausstrahlung, die er schon einmal
+        // gesehen hat - die ERSTE bekommt das echte Urteil und damit die Aufnahme. In
+        // welcher Reihenfolge er sie sieht, bestimmte bisher der Lieferant der Datei.
+        // Damit konnte die Aufnahme auf einer spaeteren Ausstrahlung landen, waehrend
+        // die fruehere ungenutzt durchlief.
+        //
+        // Das ist mehr als eine Geschmacksfrage: laufen zwei verschiedene Folgen unter
+        // derselben Nummer - "The Voice of Germany" S16 lief am 11.09.2026 mit Folge 1
+        // auf SAT.1 und am 12.09. mit Folge 2 auf ProSieben, das XMLTV fuehrte BEIDE als
+        // S16E01 -, dann entscheidet die Reihenfolge, welche der beiden man bekommt.
+        // Die frueheste zu nehmen ist die einzige Wahl, die man begruenden kann.
+        $liste = [];
         foreach ($leser->sendungen($vonLesen, $bis) as $s) {
+            $liste[] = $s;
+        }
+        usort($liste, static fn(array $a, array $b): int => ((int) $a['start']) <=> ((int) $b['start']));
+
+        foreach ($liste as $s) {
             // Der Filmbestand kennt nur Titel. Deshalb wird HIER gezaehlt, fuer
             // jede Ausstrahlung, auch die vor dem Fenster: ein Titel, der im
             // Zeitraum dutzendfach laeuft, ist eine Reihe und kein Film.
