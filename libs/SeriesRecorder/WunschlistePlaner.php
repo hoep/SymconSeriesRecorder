@@ -39,6 +39,9 @@ final class WunschlistePlaner
     /** @var list<string> */
     private array $abweichungen = [];
 
+    /** @var list<string> */
+    private array $luecken = [];
+
     /**
      * @param string $datei    Zwischenlager (JSON)
      * @param ?callable $holer liefert das HTML des TV-Planers; null = nur lesen, nie holen
@@ -65,6 +68,25 @@ final class WunschlistePlaner
     public function abweichungen(): array
     {
         return $this->abweichungen;
+    }
+
+    /**
+     * Ausstrahlungen, zu denen der Planer NICHTS sagt - dort gilt weiter das XMLTV
+     * allein. Die Liste gehoert sichtbar gemacht: sie zeigt genau die Stellen, an
+     * denen die Berichtigung nicht greifen kann.
+     *
+     * @return list<string>
+     */
+    public function luecken(): array
+    {
+        return $this->luecken;
+    }
+
+    public function merkeLuecke(string $text): void
+    {
+        if (count($this->luecken) < 200) {
+            $this->luecken[] = $text;
+        }
     }
 
     public function anzahl(): int

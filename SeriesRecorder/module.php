@@ -205,6 +205,7 @@ class SeriesRecorder extends IPSModule
         $this->RegisterVariableString('OffeneSender', 'Sender ohne Empfangskanal', '', 70);
         $this->RegisterVariableString('Quellen', 'Episodenquellen', '', 80);
         $this->RegisterVariableString('PlanerAbweichungen', 'TV-Planer berichtigt', '~TextBox', 82);
+        $this->RegisterVariableString('PlanerLuecken', 'TV-Planer kennt nicht', '~TextBox', 83);
         $this->RegisterVariableString('Bezug', 'Programmvorschau geholt', '', 90);
         $this->RegisterVariableString('Wunschliste', 'Wunschliste geholt', '', 100);
         $this->RegisterVariableString('Bestand', 'Bestand aufgenommen', '', 110);
@@ -317,6 +318,10 @@ class SeriesRecorder extends IPSModule
         // gehoeren vor Augen: es sind genau die Ausstrahlungen, bei denen frueher
         // still geraten wurde - und manchmal falsch.
         $abw = (array) ($e['planerAbweichungen'] ?? []);
+        $luecke = (array) ($e['planerLuecken'] ?? []);
+        $this->SetValue('PlanerLuecken', $luecke === []
+            ? date('d.m. H:i') . ' · der TV-Planer kennt jede Ausstrahlung'
+            : date('d.m. H:i') . ' · ' . count($luecke) . " ohne Planer-Eintrag\n" . implode("\n", $luecke));
         $this->SetValue('PlanerAbweichungen', $abw === []
             ? date('d.m. H:i') . ' · keine Abweichung zwischen EPG und TV-Planer'
             : date('d.m. H:i') . ' · ' . count($abw) . ' berichtigt' . "\n" . implode("\n", $abw));

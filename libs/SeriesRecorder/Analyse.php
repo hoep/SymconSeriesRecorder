@@ -188,6 +188,14 @@ final class Analyse
                 $z[$u['urteil']] = ($z[$u['urteil']] ?? 0) + 1;
                 // Wo die beiden Quellen auseinandergehen, soll man es SEHEN. Genau
                 // eine solche Zeile haette den Voice-Vorfall vom 11.09.2026 verhindert.
+                if ($pl === null) {
+                    $this->planer?->merkeLuecke(sprintf('%s  %s  %s  %s',
+                        date('d.m. H:i', (int) $s['start']),
+                        (string) ($kanal[$s['kanal']] ?? ''),
+                        (string) $t['ablage'],
+                        (string) ($u['staffel'] > 0 || $u['folge'] > 0
+                            ? Bestand::nummer((int) $u['staffel'], (int) $u['folge']) : '-')));
+                }
                 if ($pl !== null) {
                     $z['vom Planer bestaetigt'] = ($z['vom Planer bestaetigt'] ?? 0) + 1;
                     $epg = EpisodenNummer::bestimme((string) $s['folge'], (string) $s['titel'],
@@ -299,6 +307,7 @@ final class Analyse
             // Wo XMLTV und TV-Planer verschiedener Meinung waren. Genau das will man
             // sehen: es sind die Stellen, an denen frueher still geraten wurde.
             'planerAbweichungen' => $this->planer?->abweichungen() ?? [],
+            'planerLuecken'      => $this->planer?->luecken() ?? [],
             'fastTreffer'  => self::naheDran($fast, $this->favoriten),
             'dauerMs'      => (int) round((microtime(true) - $t0) * 1000),
         ];
