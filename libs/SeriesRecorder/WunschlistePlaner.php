@@ -42,6 +42,9 @@ final class WunschlistePlaner
     /** @var list<string> */
     private array $luecken = [];
 
+    /** @var array<string,list<array<string,mixed>>> Ablagename (Bestand::form) => Eintraege */
+    private array $nachAblage = [];
+
     /**
      * @param string $datei    Zwischenlager (JSON)
      * @param ?callable $holer liefert das HTML des TV-Planers; null = nur lesen, nie holen
@@ -96,6 +99,35 @@ final class WunschlistePlaner
     }
 
     /**
+     * Die Eintraege unter dem ABLAGENAMEN einordnen.
+     *
+     * Dieselbe Serie heisst an drei Stellen verschieden: der Planer schreibt
+     * "Criminal Intent - Verbrechen im Visier", die Ablage "Criminal Intent", das EPG
+     * mal so, mal so. Es ist EINE Serie, und das Haus hat dafuer laengst eine
+     * Titeltabelle - die wird hier benutzt, statt zwei Schreibweisen zu raten.
+     *
+     * @param callable(string):string $ablageFuer loest einen Seriennamen zum Ablagenamen auf
+     */
+    public function ordneZu(callable $ablageFuer): void
+    {
+        $this->laden();
+        $this->nachAblage = [];
+        foreach ($this->eintraege as $e) {
+            $namen = [(string) $e['serie']];
+            $auf = trim((string) $ablageFuer((string) $e['serie']));
+            if ($auf !== '') {
+                $namen[] = $auf;
+            }
+            foreach (array_unique($namen) as $n) {
+                $k = Bestand::form($n);
+                if ($k !== '') {
+                    $this->nachAblage[$k][] = $e;
+                }
+            }
+        }
+    }
+
+    /**
      * Die Ausstrahlung im Planer suchen.
      *
      * Verglichen wird ueber SERIE und ZEIT, nicht ueber den Sendernamen: wunschliste
@@ -113,12 +145,19 @@ final class WunschlistePlaner
         if ($s === '' || $start <= 0) {
             return null;
         }
+        // Ueber den Ablagenamen, sofern eingeordnet - sonst ueber den rohen Namen.
+        $menge = $this->nachAblage[$s] ?? null;
+        if ($menge === null) {
+            $menge = [];
+            foreach ($this->eintraege as $e) {
+                if (Bestand::form($e['serie']) === $s) {
+                    $menge[] = $e;
+                }
+            }
+        }
         $besterAbstand = $toleranzS + 1;
         $bester = null;
-        foreach ($this->eintraege as $e) {
-            if (Bestand::form($e['serie']) !== $s) {
-                continue;
-            }
+        foreach ($menge as $e) {
             $abstand = abs($e['start'] - $start);
             if ($abstand <= $toleranzS && $abstand < $besterAbstand) {
                 $besterAbstand = $abstand;

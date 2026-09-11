@@ -60,6 +60,15 @@ final class Analyse
     {
         $t0 = microtime(true);
         $resolver = new TitelResolver($this->favoriten, $this->aliase);
+
+        // Den Planer unter DENSELBEN Ablagenamen einordnen, unter denen auch die
+        // Ausstrahlungen gefuehrt werden. Sonst scheitert die Zuordnung an einer
+        // blossen Schreibweise - "Criminal Intent - Verbrechen im Visier" und
+        // "Criminal Intent" sind eine Serie, und die Titeltabelle weiss das.
+        $this->planer?->ordneZu(static function (string $name) use ($resolver): string {
+            $t = $resolver->bestimme($name);
+            return $t !== null ? (string) $t['ablage'] : '';
+        });
         $resolver->setAblagenamen($this->ablagenamen);
 
         $sender = $leser->sender();
@@ -169,7 +178,7 @@ final class Analyse
             // und weiss, ob die Ausstrahlung eine Wiederholung ist. Wo er schweigt,
             // bleibt alles wie bisher.
             $pl = $this->planer?->finde((string) ($t['ablage'] ?? $s['titel']), (int) $s['start'])
-                ?? $this->planer?->finde((string) $s['titel'], (int) $s['start']);
+                ?? $this->planer?->finde((string) $s['titel'], (int) $s['start']);   // Ruecklage
             $u = $urteiler?->fuer([
                 'serie'      => $t['ablage'],
                 'titel'      => $s['titel'],
