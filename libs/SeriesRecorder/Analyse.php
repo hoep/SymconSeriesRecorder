@@ -206,6 +206,10 @@ final class Analyse
                 'grund'  => $u['grund'] ?? '',
                 'staffelFolge' => ($u !== null && ($u['staffel'] > 0 || $u['folge'] > 0))
                                     ? Bestand::nummer($u['staffel'], $u['folge']) : '',
+                // Wie viele Aufnahmen der Bestand zu dieser Folge fuehrt. Nur das ist
+                // die Auskunft "liegt MEHRFACH auf der Platte" - das Urteil 'mehrfach'
+                // sagt etwas voellig anderes, naemlich "laeuft in diesem Zeitraum erneut".
+                'dateien' => $u !== null ? count((array) ($u['dateien'] ?? [])) : 0,
                 'inhalt' => $inhalt,
             ];
         }

@@ -1666,13 +1666,53 @@ class SeriesRecorder extends IPSModule
     {
         $marken = $nachschlag;
         $nummern = [];
+
+        // Was die ERSTE Ausstrahlung einer Folge ueber die Platte gesagt hat.
+        //
+        // 'mehrfach' ist KEINE Aussage ueber die Platte: der Entscheider vergibt es fuer
+        // "laeuft in diesem Zeitraum erneut", und zwar BEVOR er im Bestand nachsieht
+        // (Entscheidung.php, Schritt 3 vor Schritt 5). Hier wurde daraus bisher die
+        // Marke 2 = "liegt mehrfach auf der Platte". Bei "The Voice of Germany" S16E01
+        // hiess das: die Folge ist nirgends aufgenommen - der Bestand endet bei S15 -,
+        // lief aber viermal im Zeitraum, und drei davon standen als "liegt mehrfach
+        // vor" im Raster (gemeldet 11.09.2026).
+        //
+        // Ob eine Folge da ist, sagt allein die erste Ausstrahlung. Die Wiederholungen
+        // erben dieses Urteil - und die 2 bekommt endlich ihre eigentliche Bedeutung:
+        // der Bestand fuehrt MEHR ALS EINE Datei dazu.
+        $folgenschluessel = static function (array $s): string {
+            return mb_strtolower(trim((string) ($s['serie'] ?? '')) . '|'
+                . (string) ($s['staffelFolge'] ?? '') . '|' . trim((string) ($s['titel'] ?? '')));
+        };
+        $plattenurteil = [];
+        foreach ($sendungen as $s) {
+            $u = (string) ($s['urteil'] ?? '');
+            if ($u !== 'vorhanden' && $u !== 'aufnehmen') {
+                continue;
+            }
+            $sch = $folgenschluessel($s);
+            if (!isset($plattenurteil[$sch])) {
+                $plattenurteil[$sch] = ['urteil' => $u, 'dateien' => (int) ($s['dateien'] ?? 0)];
+            }
+        }
+
         foreach ($sendungen as $s) {
             $k = trim((string) ($s['kanalId'] ?? ''));
             if ($k === '') {
                 continue;
             }
             $u = (string) ($s['urteil'] ?? '');
-            if ($u !== 'vorhanden' && $u !== 'mehrfach') {
+            if ($u === 'mehrfach') {
+                // Wiederholung im Zeitraum: das Urteil der ersten Ausstrahlung gilt.
+                $pu = $plattenurteil[$folgenschluessel($s)] ?? null;
+                if ($pu !== null && $pu['urteil'] === 'vorhanden') {
+                    $marken[$k . '|' . (int) $s['start']] = $pu['dateien'] > 1 ? 2 : 1;
+                } else {
+                    unset($marken[$k . '|' . (int) $s['start']]);
+                }
+                continue;
+            }
+            if ($u !== 'vorhanden') {
                 // Nur EIN Urteil ist eine Aussage ueber die Platte: "aufnehmen"
                 // heisst, der Entscheider hat im Bestand nachgesehen und nichts
                 // gefunden. Das zaehlt auch gegen den Nachschlag, der nur Name
@@ -1687,10 +1727,10 @@ class SeriesRecorder extends IPSModule
                 }
                 continue;
             }
-            // 1 = liegt da, 2 = liegt mehrfach da. Die 3 der Filmablagen kommt
-            // aus dem Nachschlag und wird hier nie gesetzt: was ein Urteil hat,
-            // ist eine Serienfolge.
-            $marken[$k . '|' . (int) $s['start']] = $u === 'mehrfach' ? 2 : 1;
+            // 1 = liegt da, 2 = liegt MEHRFACH da (mehr als eine Datei im Bestand).
+            // Die 3 der Filmablagen kommt aus dem Nachschlag und wird hier nie
+            // gesetzt: was ein Urteil hat, ist eine Serienfolge.
+            $marken[$k . '|' . (int) $s['start']] = ((int) ($s['dateien'] ?? 0)) > 1 ? 2 : 1;
         }
         // Nummer, Serienname und Episodentitel gleich mitgeben - alles drei so,
         // wie die Aufnahme auf der Platte heisst.

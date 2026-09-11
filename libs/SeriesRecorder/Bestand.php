@@ -32,6 +32,8 @@ final class Bestand
 
     /** @var array<string,list<string>> "serie|episodentitel" => Dateipfade */
     private array $nachTitel = [];
+    /** Zu jedem Titel-Eintrag die Staffel der Aufnahme, gleicher Index wie in nachTitel. */
+    private array $nachTitelStaffel = [];
 
     /** @var array<string,list<string>> "filmtitel" => Dateipfade (flache Ablagen) */
     private array $nachFilm = [];
@@ -89,9 +91,32 @@ final class Bestand
         // Der Episodentitel traegt, wo die Nummer fehlt - und er faengt auch den
         // Fall, in dem dieselbe Folge unter abweichender Zaehlung gelaufen ist
         // (EPG und TVDB sind sich bei Mehrteilern oft nicht einig).
+        //
+        // ABER: er darf die Staffel nicht ueberspringen. Serien mit laufenden
+        // Formatnamen tragen denselben Episodentitel in JEDER Staffel - "The Voice
+        // of Germany" hat "Blind Audition (1)" in S12 und S13. S16E01 lief damit als
+        // "liegt schon auf der Platte", obwohl der Bestand bei S15 endet (gemeldet
+        // 11.09.2026). Ist die Staffel der gesuchten Ausstrahlung bekannt, zaehlen
+        // deshalb nur Aufnahmen DERSELBEN Staffel; die abweichende Zaehlung innerhalb
+        // einer Staffel faengt der Titel weiterhin ab.
         $t = self::form($episodentitel);
         if ($s !== '' && $t !== '' && isset($this->nachTitel[$s . '|' . $t])) {
-            return ['da' => true, 'weg' => 'titel', 'dateien' => $this->nachTitel[$s . '|' . $t]];
+            $k = $s . '|' . $t;
+            if ($staffel <= 0) {
+                return ['da' => true, 'weg' => 'titel', 'dateien' => $this->nachTitel[$k]];
+            }
+            $passend = [];
+            foreach ($this->nachTitel[$k] as $i => $pfad) {
+                $st = (int) ($this->nachTitelStaffel[$k][$i] ?? -1);
+                // -1 = Aufnahme ohne erkennbare Staffel: die darf weiter zaehlen,
+                // sonst verliert man die Altbestaende ohne Nummer im Namen.
+                if ($st < 0 || $st === $staffel) {
+                    $passend[] = $pfad;
+                }
+            }
+            if ($passend !== []) {
+                return ['da' => true, 'weg' => 'titel', 'dateien' => $passend];
+            }
         }
         return ['da' => false, 'weg' => '', 'dateien' => []];
     }
@@ -166,8 +191,16 @@ final class Bestand
             } elseif ($rest !== []) {
                 $titel = (string) end($rest);
             }
+            // Staffel der Aufnahme merken, damit der Titelweg sie spaeter pruefen kann.
+            $stAufn = -1;
+            if ($nummer !== '' && preg_match('/^S(\d{1,4})E\d{1,4}$/', $nummer, $mn)) {
+                $stAufn = (int) $mn[1];
+            } elseif (preg_match('/ - S(\d{1,4})E\d{1,4} - /i', $pfad, $mn)) {
+                $stAufn = (int) $mn[1];
+            }
             foreach (self::titelFormen($titel) as $t) {
                 $this->nachTitel[$s . '|' . $t][] = $pfad;
+                $this->nachTitelStaffel[$s . '|' . $t][] = $stAufn;
             }
         }
         fclose($fh);
