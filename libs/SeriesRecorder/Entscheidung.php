@@ -86,6 +86,13 @@ final class Entscheidung
         $fo = $n['folge'];
         $quelle = $n['quelle'];
 
+        // Die Wiederholungs-Kennzeichnung des TV-Planers gilt unabhaengig von der
+        // Nummer - sie ist eine Aussage ueber die AUSSTRAHLUNG, nicht ueber die Folge.
+        $planerWdh = null;
+        if (array_key_exists('planerWdh', $sendung) && $sendung['planerWdh'] !== null) {
+            $planerWdh = (bool) $sendung['planerWdh'];
+        }
+
         // Liefert das EPG keine brauchbare Nummer, im Episodenkatalog nachschlagen.
         // Das ist derselbe Weg, den die Skript-Fassung ueber TheTVDB geht - nur aus
         // dem Cache, den sie dabei angelegt hat. Ohne diesen Schritt bleibt eine
@@ -144,6 +151,43 @@ final class Entscheidung
             }
         }
 
+        // Der TV-Planer - NACH dem Katalog, nicht davor.
+        //
+        // Er ist die einzige Quelle, die je Ausstrahlung sagt, welche Folge dort
+        // wirklich laeuft: am 11.09.2026 fuehrte das XMLTV vier Ausstrahlungen von
+        // "The Voice of Germany" als S16E01, obwohl auf ProSieben Folge 2 lief.
+        //
+        // Ihn ueber den KATALOG zu stellen war aber ein Fehler, und zwar ein teurer.
+        // Beide zaehlen dieselbe Serie verschieden: der Planer fuehrt Tatort flach
+        // (S00E1339), der Katalog nach Jahr (S2024E21) - und genau so liegt die
+        // Aufnahme auf der Platte. Mit dem Planer als hoechster Instanz fand der
+        // Bestandsabgleich 36 Aufnahmen nicht mehr und die Schranke "season >= 2024"
+        // schloss sieben Serien zusaetzlich aus. Gemessen am 11.09.2026, eine Stunde
+        // nach dem Einbau. Der Katalog bleibt die Zaehlung des Hauses; der Planer
+        // spricht nur dort, wo der Katalog schweigt.
+        //
+        // Und noch eine Schranke: eine Staffel 0 des Planers darf eine ECHTE Staffel
+        // des EPG nicht verdraengen. Der Planer fuehrt manche Reihen flach - "Blind
+        // ermittelt" als S00E10, "Hundertdreizehn" als S00E01 -, waehrend EPG und
+        // Ablage sie als S01 kennen. Ohne diese Schranke fanden sieben Marken ihre
+        // Aufnahme nicht mehr (gemessen 11.09.2026). Er ergaenzt also nach unten, aber
+        // er verschlechtert nicht.
+        $pst = (int) ($sendung['planerStaffel'] ?? 0);
+        $pfo = (int) ($sendung['planerFolge'] ?? 0);
+        if ($pst === 0 && $st > 0) {
+            $pst = 0;
+            $pfo = 0;
+        }
+        if ($quelle !== 'katalog' && ($pst > 0 || $pfo > 0)) {
+            $st = $pst;
+            $fo = $pfo;
+            $quelle = ($quelle === '' ? 'planer' : $quelle . '+planer');
+            $pt = trim((string) ($sendung['planerTitel'] ?? ''));
+            if ($pt !== '' && self::nurNummer($eptitel)) {
+                $eptitel = $pt;
+            }
+        }
+
         // Staffel berichtigen, BEVOR irgendetwas verglichen wird.
         //
         // Die Reihenfolge ist der ganze Punkt: der Bestand auf der Platte liegt
@@ -180,9 +224,22 @@ final class Entscheidung
             }
         }
 
+        // Wiederholung im Zeitraum? Das entscheidet weiterhin der gesehen-Merker, und
+        // zwar aus gutem Grund NICHT die "(Wdh.)"-Kennzeichnung des Planers.
+        //
+        // Sie sagt, dass die Ausstrahlung eine Wiederholung IST - nicht, dass man die
+        // Folge schon hat. Laeuft die Erstausstrahlung ausserhalb des Vorschaufensters,
+        // ist die Wiederholung die einzige Gelegenheit, und genau die haette der Riegel
+        // weggeworfen. Beim Einbau am 11.09.2026 fielen darueber 34 Ausstrahlungen von
+        // "vorhanden" auf "mehrfach", bevor es auffiel.
+        //
+        // Der Planer wirkt hier trotzdem, nur an der richtigen Stelle: mit SEINER Nummer
+        // im Schluessel unterscheidet der Merker endlich zwei Folgen, die das XMLTV
+        // gleich nennt. Genau daran ist der Voice-Fall gescheitert.
         $schluessel = Bestand::form($serie) . '|' . $st . '|' . $fo . '|' . Bestand::form($eptitel);
         if (isset($this->gesehen[$schluessel])) {
-            return $ergebnis(self::MEHRFACH, 'laeuft in diesem Zeitraum erneut');
+            return $ergebnis(self::MEHRFACH, 'laeuft in diesem Zeitraum erneut'
+                . ($planerWdh === true ? ' (Planer: Wdh.)' : ''));
         }
         $this->gesehen[$schluessel] = true;
 

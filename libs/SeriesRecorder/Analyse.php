@@ -8,6 +8,7 @@ require_once __DIR__ . '/TitelResolver.php';
 require_once __DIR__ . '/KanalMapper.php';
 require_once __DIR__ . '/XmltvLeser.php';
 require_once __DIR__ . '/Entscheidung.php';
+require_once __DIR__ . '/WunschlistePlaner.php';
 require_once __DIR__ . '/Receiver.php';
 require_once __DIR__ . '/EpisodenNummer.php';
 
@@ -36,6 +37,7 @@ final class Analyse
         private ?EpisodenQuelle $katalog = null,
         private ?Receiver $receiver = null,
         private ?Staffelregeln $staffelregeln = null,
+        private ?WunschlistePlaner $planer = null,
     ) {
     }
 
@@ -163,6 +165,11 @@ final class Analyse
             // benutzen, wenn der Katalog es als Episodentitel bestaetigt - sonst
             // wuerde aus "Lethal Weapon - Zwei stahlharte Profis" (dem Kinofilm)
             // eine Folge der Serie.
+            // Den TV-Planer fragen, BEVOR entschieden wird: er kennt die wahre Folge
+            // und weiss, ob die Ausstrahlung eine Wiederholung ist. Wo er schweigt,
+            // bleibt alles wie bisher.
+            $pl = $this->planer?->finde((string) ($t['ablage'] ?? $s['titel']), (int) $s['start'])
+                ?? $this->planer?->finde((string) $s['titel'], (int) $s['start']);
             $u = $urteiler?->fuer([
                 'serie'      => $t['ablage'],
                 'titel'      => $s['titel'],
@@ -170,11 +177,36 @@ final class Analyse
                 'zusatz'     => $t['zusatz'],
                 'folgeNum'   => $s['folge'],
                 'kanal'      => $kanal[$s['kanal']],
+                'planerStaffel' => $pl !== null ? (int) $pl['staffel'] : 0,
+                'planerFolge'   => $pl !== null ? (int) $pl['folge'] : 0,
+                'planerTitel'   => $pl !== null ? (string) $pl['titel'] : '',
+                'planerWdh'     => $pl !== null ? (bool) $pl['wdh'] : null,
                 'start'      => $s['start'],
                 'ende'       => $s['ende'],
             ]);
             if ($u !== null) {
                 $z[$u['urteil']] = ($z[$u['urteil']] ?? 0) + 1;
+                // Wo die beiden Quellen auseinandergehen, soll man es SEHEN. Genau
+                // eine solche Zeile haette den Voice-Vorfall vom 11.09.2026 verhindert.
+                if ($pl !== null) {
+                    $z['vom Planer bestaetigt'] = ($z['vom Planer bestaetigt'] ?? 0) + 1;
+                    $epg = EpisodenNummer::bestimme((string) $s['folge'], (string) $s['titel'],
+                                                    (string) $s['untertitel']);
+                    if (((int) $epg['staffel'] > 0 || (int) $epg['folge'] > 0)
+                        && ((int) $epg['staffel'] !== (int) $pl['staffel']
+                            || (int) $epg['folge'] !== (int) $pl['folge'])) {
+                        $z['Planer korrigiert'] = ($z['Planer korrigiert'] ?? 0) + 1;
+                        $this->planer?->merkeAbweichung(sprintf(
+                            '%s  %s  %s: EPG %s, Planer %s%s',
+                            date('d.m. H:i', (int) $s['start']),
+                            (string) ($kanal[$s['kanal']] ?? ''),
+                            (string) $t['ablage'],
+                            Bestand::nummer((int) $epg['staffel'], (int) $epg['folge']),
+                            Bestand::nummer((int) $pl['staffel'], (int) $pl['folge']),
+                            $pl['wdh'] ? ' (Wdh.)' : ''
+                        ));
+                    }
+                }
                 // "ausgeschlossen", "unklar" und "programmiert" sagen nichts
                 // darueber, ob die Folge auf der Platte liegt - der Entscheider
                 // steigt vorher aus. Also nachschlagen, und zwar mit SEINER
@@ -262,7 +294,11 @@ final class Analyse
             'kennzahlen'   => $z + ['Serien mit Ausstrahlung' => count(array_unique(array_column($treffer, 'serie')))],
             'offeneSender' => $offen,
             'quellen'      => trim(($this->katalog?->bericht() ?? '')
-                                . ($this->receiver !== null ? ' | ' . $this->receiver->bericht() : '')),
+                                . ($this->receiver !== null ? ' | ' . $this->receiver->bericht() : '')
+                                . ($this->planer !== null ? ' | TV-Planer: ' . $this->planer->meldung() : '')),
+            // Wo XMLTV und TV-Planer verschiedener Meinung waren. Genau das will man
+            // sehen: es sind die Stellen, an denen frueher still geraten wurde.
+            'planerAbweichungen' => $this->planer?->abweichungen() ?? [],
             'fastTreffer'  => self::naheDran($fast, $this->favoriten),
             'dauerMs'      => (int) round((microtime(true) - $t0) * 1000),
         ];

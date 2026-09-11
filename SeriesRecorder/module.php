@@ -10,6 +10,7 @@ require_once __DIR__ . '/../libs/SeriesRecorder/TmdbQuelle.php';
 require_once __DIR__ . '/../libs/SeriesRecorder/TvdbQuelle.php';
 require_once __DIR__ . '/../libs/SeriesRecorder/XmltvBezug.php';
 require_once __DIR__ . '/../libs/SeriesRecorder/WunschlisteBezug.php';
+require_once __DIR__ . '/../libs/SeriesRecorder/WunschlistePlaner.php';
 require_once __DIR__ . '/../libs/SeriesRecorder/Serienliste.php';
 require_once __DIR__ . '/../libs/SeriesRecorder/Bestandsscan.php';
 require_once __DIR__ . '/../libs/SeriesRecorder/Receiver.php';
@@ -36,6 +37,7 @@ use Hoep\SeriesRecorder\TvdbQuelle;
 use Hoep\SeriesRecorder\KanalMapper;
 use Hoep\SeriesRecorder\TitelResolver;
 use Hoep\SeriesRecorder\WunschlisteBezug;
+use Hoep\SeriesRecorder\WunschlistePlaner;
 use Hoep\SeriesRecorder\XmltvBezug;
 use Hoep\SeriesRecorder\XmltvLeser;
 
@@ -202,6 +204,7 @@ class SeriesRecorder extends IPSModule
         $this->RegisterVariableString('Ausstrahlungen', 'Ausstrahlungen (JSON)', '', 60);
         $this->RegisterVariableString('OffeneSender', 'Sender ohne Empfangskanal', '', 70);
         $this->RegisterVariableString('Quellen', 'Episodenquellen', '', 80);
+        $this->RegisterVariableString('PlanerAbweichungen', 'TV-Planer berichtigt', '~TextBox', 82);
         $this->RegisterVariableString('Bezug', 'Programmvorschau geholt', '', 90);
         $this->RegisterVariableString('Wunschliste', 'Wunschliste geholt', '', 100);
         $this->RegisterVariableString('Bestand', 'Bestand aufgenommen', '', 110);
@@ -310,6 +313,13 @@ class SeriesRecorder extends IPSModule
         $this->SetValue('Kennzahlen', $this->kennzahlentabelle($e));
         $this->SetValue('Protokoll', $this->protokolltabelle());
         $this->SetValue('Quellen', (string) ($e['quellen'] ?? ''));
+        // Die Faelle, in denen der TV-Planer die Nummer des EPG berichtigt hat. Sie
+        // gehoeren vor Augen: es sind genau die Ausstrahlungen, bei denen frueher
+        // still geraten wurde - und manchmal falsch.
+        $abw = (array) ($e['planerAbweichungen'] ?? []);
+        $this->SetValue('PlanerAbweichungen', $abw === []
+            ? date('d.m. H:i') . ' · keine Abweichung zwischen EPG und TV-Planer'
+            : date('d.m. H:i') . ' · ' . count($abw) . ' berichtigt' . "\n" . implode("\n", $abw));
         $this->SetValue('Status', sprintf('%d Ausstrahlungen, davon %d fehlend; %d Serien, %d ms%s',
             $e['kennzahlen']['zugeordnet'] ?? 0,
             $e['kennzahlen']['aufnehmen'] ?? 0,
@@ -1467,7 +1477,71 @@ class SeriesRecorder extends IPSModule
         $tt = $this->titeltabelle();
         return new Analyse($this->favoriten(), $tt['aliase'], $tt['ablage'], $this->empfangbar(),
             $this->kanaltabelle(), new Bestand($this->bestandsdatei()), $this->bedingungen(),
-            $this->episodenquelle(), $this->receiver(), $this->staffelregeln());
+            $this->episodenquelle(), $this->receiver(), $this->staffelregeln(), $this->planer());
+    }
+
+    /**
+     * Der TV-Planer von wunschliste.de als zweite Quelle fuer die Folgennummer.
+     *
+     * Geholt wird hoechstens stuendlich und nur, wenn Zugangsdaten hinterlegt sind;
+     * das Zwischenlager liegt neben den uebrigen Arbeitsdateien. Fehlt der Zugang
+     * oder scheitert der Abruf, arbeitet alles weiter wie vorher - die Quelle
+     * ergaenzt, sie ist keine Voraussetzung.
+     */
+    private function planer(): ?WunschlistePlaner
+    {
+        if ($this->planer !== null) {
+            return $this->planer;
+        }
+        $datei = rtrim($this->ReadPropertyString('Datenpfad'), '/') . '/tvplaner.json';
+        $benutzer = trim($this->ReadPropertyString('WunschBenutzer'));
+        $passwort = $this->ReadPropertyString('WunschPasswort');
+        $holer = null;
+        if ($benutzer !== '' && $passwort !== '') {
+            $holer = function () use ($benutzer, $passwort): string {
+                return $this->holeTvPlaner($benutzer, $passwort);
+            };
+        }
+        // Sechs Stunden Standzeit: der Planer reicht 14 Tage voraus und aendert sich
+        // selten. Stuendlich zu holen hiesse 24 Anmeldungen am Tag bei einem Anbieter,
+        // der uns die Daten freundlicherweise ueberlaesst.
+        $this->planer = new WunschlistePlaner($datei, $holer, 21600);
+        return $this->planer;
+    }
+
+    /**
+     * Das HTML des TV-Planers holen - ueber dieselbe angemeldete Sitzung, die auch
+     * die Favoritenliste zieht. Eine zweite Anmeldung waere nicht nur unnoetig,
+     * sondern unhoeflich gegenueber dem Anbieter.
+     */
+    private function holeTvPlaner(string $benutzer, string $passwort): string
+    {
+        if (!class_exists(\SerienRecorderWunschliste::class)) {
+            return '';
+        }
+        $ordner = rtrim($this->ReadPropertyString('Datenpfad'), '/');
+        $h = new \SerienRecorderWunschliste([
+            'debug' => false, 'debug_level' => 0, 'cache_dir' => $ordner,
+            'base_url' => 'https://www.wunschliste.de',
+            'username' => $benutzer, 'password' => $passwort, 'timeout' => 30,
+        ], new class {
+            public function log($n, $e = 1): void {}
+            public function shouldRefreshFile($d, $s = 24): bool { return true; }
+            public function zeilen(): array { return []; }
+        });
+        if (!$h->login()) {
+            return '';
+        }
+        // prepareCurl() traegt die Sitzung; sie ist privat, weil sie niemanden
+        // ausserhalb der Klasse etwas angeht - hier aber genau das Richtige.
+        $r = new \ReflectionClass($h);
+        $m = $r->getMethod('prepareCurl');
+        $m->setAccessible(true);
+        $ch = $m->invoke($h);
+        curl_setopt($ch, CURLOPT_URL, WunschlistePlaner::URL);
+        $html = (string) curl_exec($ch);
+        curl_close($ch);
+        return $html;
     }
 
     /**
@@ -2014,6 +2088,8 @@ class SeriesRecorder extends IPSModule
         $eigen = $this->pfad('ScanZiel');
         return is_readable($eigen) ? $eigen : $this->pfad('BestandDatei');
     }
+
+    private ?WunschlistePlaner $planer = null;
 
     private function bedingungen(): Bedingungen
     {
