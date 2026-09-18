@@ -3,6 +3,28 @@
 Serienrecorder als IP-Symcon-Modul. Loest die Skript-Fassung
 (`44702.ips.php` + `PHPSerienRecorder.php`) schrittweise ab.
 
+
+## Voraussetzungen
+
+- IP-Symcon ab Kernel 7.1, PHP 8
+- Ein Enigma2-Receiver mit OpenWebIf (die Aufnahmen werden dort programmiert) -
+  siehe [SymconEnigmaReceiver](https://github.com/hoep/SymconEnigmaReceiver)
+- Zugang zu den verwendeten Serien- und Programmquellen
+
+## Installation
+
+Konsole → *Kern-Instanzen* → **Modules** → Hinzufuegen:
+
+```
+https://github.com/hoep/SymconSeriesRecorder
+```
+
+Danach eine Instanz `SeriesRecorder` anlegen und den Receiver zuordnen.
+
+## Lizenz
+
+MIT - siehe `LICENSE`.
+
 ## Stand
 
 Phase 1 von 4. Enthalten ist bisher der **Titel-Resolver** - der Teil, in dem
