@@ -18,6 +18,7 @@ require_once __DIR__ . '/../libs/SeriesRecorder/Duplikate.php';
 require_once __DIR__ . '/../libs/SeriesRecorder/Katalogverweise.php';
 require_once __DIR__ . '/../libs/SeriesRecorder/Katalogzuordnung.php';
 require_once __DIR__ . '/../libs/SeriesRecorder/Dateisatz.php';
+require_once __DIR__ . '/../libs/SeriesRecorder/Dateiname.php';
 
 use Hoep\SeriesRecorder\Analyse;
 use Hoep\SeriesRecorder\Bedingungen;
@@ -27,6 +28,7 @@ use Hoep\SeriesRecorder\Katalogzuordnung;
 use Hoep\SeriesRecorder\Bestand;
 use Hoep\SeriesRecorder\Bestandsscan;
 use Hoep\SeriesRecorder\Dateisatz;
+use Hoep\SeriesRecorder\Dateiname;
 use Hoep\SeriesRecorder\Duplikate;
 use Hoep\SeriesRecorder\Episodenkatalog;
 use Hoep\SeriesRecorder\Quellenkette;
@@ -1215,6 +1217,165 @@ class SeriesRecorder extends IPSModule
     }
 
     /**
+     * Eine der sechs Regeltabellen als Ganzes ersetzen.
+     *
+     * Gedacht fuer Oberflaechen ausserhalb des Konfigurationsformulars - die
+     * Visualisierung pflegt dieselben Zeilen, die das Formular zeigt. Deshalb
+     * liegt die Pruefung HIER und nicht beim Aufrufer: das Schema gehoert dem
+     * Modul. Prueft der Aufrufer selbst, laufen Formular und Visualisierung
+     * frueher oder spaeter auseinander, und dann schreibt die eine Seite Zeilen,
+     * mit denen die andere nichts anfangen kann.
+     *
+     * Ersetzt wird die GANZE Tabelle, nicht einzelne Zeilen. Eine Oberflaeche,
+     * die Zeilen sammelt und einmal speichert, braucht kein Zusammenfuehren -
+     * und ein Zusammenfuehren braeuchte einen Schluessel, den diese Tabellen
+     * nicht haben (dieselbe Serie darf mehrfach vorkommen).
+     *
+     * Was ApplyChanges NICHT tut: rechnen. Die Tabellen wirken im naechsten Lauf
+     * oder sofort nach einem Aufruf von Analyse(). Wer also gleich das Ergebnis
+     * sehen will, ruft danach Analyse() - das ist bewusst getrennt, weil ein
+     * Speichern in Sekundenbruchteilen fertig ist und eine Neuberechnung nicht.
+     */
+    /**
+     * Das Schema der sechs Regeltabellen - EINE Quelle fuer beides: die Pruefung
+     * beim Schreiben und die Spalten, die eine Oberflaeche zeichnet. Lagen sie
+     * getrennt, boete die Visualisierung Spalten an, die die Pruefung nicht kennt
+     * (oder umgekehrt) - und das faellt erst beim Speichern auf.
+     *
+     * 'art'    text | wahl | ja | zahl | muster ; 'pflicht': leer laesst die Zeile entfallen
+     * 'titel'  Ueberschrift fuer eine Oberflaeche, 'breite' deren Spaltenbreite
+     * 'anders' nur anzeigen, wenn der Wert vom genannten Feld abweicht
+     * 'namen'  Klartext je Auswahlwert
+     */
+    private function tabellenSchema(): array
+    {
+        return [
+            'Serienliste' => [
+                'serie'  => ['art' => 'text', 'pflicht' => true, 'titel' => 'Serie', 'breite' => '54%'],
+                'quelle' => ['art' => 'wahl', 'werte' => ['eigen', 'wunschliste'], 'vorgabe' => 'eigen', 'titel' => 'Herkunft', 'breite' => '24%'],
+                'aktiv'  => ['art' => 'ja', 'vorgabe' => true, 'titel' => 'Aufnehmen', 'breite' => '22%'],
+            ],
+            'Kanaltabelle' => [
+                'xmltv' => ['art' => 'text', 'pflicht' => true, 'titel' => 'XMLTV-Sender', 'breite' => '50%'],
+                'kanal' => ['art' => 'text', 'pflicht' => true, 'titel' => 'Empfangskanal', 'breite' => '50%'],
+            ],
+            'Titeltabelle' => [
+                // Die Favoritenspalte zeigt fast immer nur "-": sie steht nur dann, wenn der
+                // Favorit vom XMLTV-Titel abweicht, und das ist die Ausnahme. Ihre Breite
+                // fehlte der Ablagespalte, deren Wert das eigentliche Ergebnis der Zeile ist -
+                // in einer 510 px breiten Kachel stand dort "NCIS New Orl...".
+                'titel'   => ['art' => 'text', 'pflicht' => true, 'titel' => 'XMLTV-Titel', 'breite' => '46%'],
+                'favorit' => ['art' => 'text', 'pflicht' => true, 'titel' => 'abw. Favorit', 'breite' => '16%', 'anders' => 'titel'],
+                'ablage'  => ['art' => 'text', 'titel' => 'Ablage', 'breite' => '38%', 'anders' => 'favorit'],           // leer = wie der Favorit
+            ],
+            'Bedingungen' => [
+                'serie' => ['art' => 'text', 'pflicht' => true, 'titel' => 'Serie', 'breite' => '46%'],
+                'feld'  => ['art' => 'wahl', 'werte' => ['season', 'episode'], 'vorgabe' => 'season', 'titel' => 'Feld', 'breite' => '20%', 'namen' => ['season' => 'Staffel', 'episode' => 'Folge']],
+                'op'    => ['art' => 'wahl', 'werte' => ['>=', '>', '<=', '<', '==', '!='], 'vorgabe' => '>=', 'titel' => 'Vergleich', 'breite' => '20%'],
+                'wert'  => ['art' => 'zahl', 'min' => -99999, 'max' => 99999, 'vorgabe' => 0, 'titel' => 'Wert', 'breite' => '18%'],
+            ],
+            'Katalogtabelle' => [
+                // Die beiden Kennungen sind hoechstens achtstellig, der Serienname nicht.
+                'serie' => ['art' => 'text', 'pflicht' => true, 'titel' => 'Serie', 'breite' => '54%'],
+                'tvdb'  => ['art' => 'zahl', 'min' => 0, 'max' => 99999999, 'vorgabe' => 0, 'titel' => 'TheTVDB', 'breite' => '20%'],
+                'tmdb'  => ['art' => 'zahl', 'min' => 0, 'max' => 99999999, 'vorgabe' => 0, 'titel' => 'TMDB', 'breite' => '20%'],
+            ],
+            'Staffeltabelle' => [
+                'serie' => ['art' => 'text', 'pflicht' => true, 'titel' => 'Serie', 'breite' => '56%'],
+                'von'   => ['art' => 'muster', 'muster' => '/^(\*|\d{1,4})$/', 'vorgabe' => '0', 'titel' => 'von', 'breite' => '20%'],
+                'nach'  => ['art' => 'zahl', 'min' => 1, 'max' => 9999, 'vorgabe' => 1, 'titel' => 'nach', 'breite' => '24%'],
+            ],
+        ];
+    }
+
+    /** Das Schema als JSON - fuer Oberflaechen, die diese Tabellen zeichnen. */
+    public function TabelleSchema(): string
+    {
+        return (string) json_encode($this->tabellenSchema(), JSON_UNESCAPED_UNICODE);
+    }
+
+    public function TabelleSetzen(string $Name, string $Json): string
+    {
+        $schema = $this->tabellenSchema();
+        if (!isset($schema[$Name])) {
+            return json_encode(['ok' => false, 'fehler' => 'unbekannte Tabelle', 'tabelle' => $Name],
+                               JSON_UNESCAPED_UNICODE);
+        }
+        $roh = json_decode($Json, true);
+        if (!is_array($roh)) {
+            return json_encode(['ok' => false, 'fehler' => 'kein gueltiges JSON'], JSON_UNESCAPED_UNICODE);
+        }
+
+        $spalten = $schema[$Name];
+        $sauber  = [];
+        $meldungen = [];
+        foreach (array_values($roh) as $nr => $zeile) {
+            if (!is_array($zeile)) {
+                $meldungen[] = 'Zeile ' . ($nr + 1) . ': keine Zeile';
+                continue;
+            }
+            $neu  = [];
+            $weg  = false;
+            foreach ($spalten as $sp => $regel) {
+                $w = $zeile[$sp] ?? null;
+                switch ($regel['art']) {
+                    case 'text':
+                        $w = trim((string) $w);
+                        if ($w === '' && !empty($regel['pflicht'])) { $weg = true; }
+                        break;
+                    case 'wahl':
+                        $w = (string) $w;
+                        if (!in_array($w, $regel['werte'], true)) { $w = $regel['vorgabe']; }
+                        break;
+                    case 'ja':
+                        $w = ($w === null) ? $regel['vorgabe'] : (bool) $w;
+                        break;
+                    case 'zahl':
+                        $w = (int) $w;
+                        if ($w < $regel['min'] || $w > $regel['max']) {
+                            $meldungen[] = 'Zeile ' . ($nr + 1) . ': ' . $sp . ' ausserhalb ' . $regel['min'] . '..' . $regel['max'];
+                            $w = (int) $regel['vorgabe'];
+                        }
+                        break;
+                    case 'muster':
+                        $w = trim((string) $w);
+                        if (!preg_match($regel['muster'], $w)) {
+                            $meldungen[] = 'Zeile ' . ($nr + 1) . ': ' . $sp . ' = "' . $w . '" passt nicht';
+                            $w = $regel['vorgabe'];
+                        }
+                        break;
+                }
+                $neu[$sp] = $w;
+            }
+            if ($weg) {
+                $meldungen[] = 'Zeile ' . ($nr + 1) . ': Pflichtfeld leer, Zeile entfaellt';
+                continue;
+            }
+            $sauber[] = $neu;
+        }
+
+        // Die Katalogtabelle traegt nur Zeilen mit mindestens einer Kennung -
+        // dieselbe Regel wie in KennungSetzen(), sonst blieben leere Zeilen stehen.
+        if ($Name === 'Katalogtabelle') {
+            $sauber = array_values(array_filter($sauber,
+                static fn(array $z): bool => $z['tvdb'] > 0 || $z['tmdb'] > 0));
+        }
+
+        $vorher = $this->ReadPropertyString($Name);
+        $nachher = (string) json_encode($sauber, JSON_UNESCAPED_UNICODE);
+        if ($vorher === $nachher) {
+            return json_encode(['ok' => true, 'tabelle' => $Name, 'zeilen' => count($sauber),
+                                'geaendert' => false, 'meldungen' => $meldungen], JSON_UNESCAPED_UNICODE);
+        }
+        IPS_SetProperty($this->InstanceID, $Name, $nachher);
+        IPS_ApplyChanges($this->InstanceID);
+        $this->LogMessage('Tabelle ' . $Name . ' ersetzt: ' . count($sauber) . ' Zeilen', KL_MESSAGE);
+
+        return json_encode(['ok' => true, 'tabelle' => $Name, 'zeilen' => count($sauber),
+                            'geaendert' => true, 'meldungen' => $meldungen], JSON_UNESCAPED_UNICODE);
+    }
+
+    /**
      * Die Liste, wie sie gerade gilt - fuer den Programmfuehrer und fuer jeden,
      * der wissen will, was aufgenommen wird.
      */
@@ -1567,7 +1728,9 @@ class SeriesRecorder extends IPSModule
         if ($basis === '') {
             return '';                      // leer = Vorgabe der Box, wie im Receiver-Modul
         }
-        $serie = trim((string) ($s['serie'] ?? ''));
+        // Der Ablagename wird hier zum PFADBESTANDTEIL - ab hier gelten die Regeln
+        // des Dateisystems, nicht die des EPG. Siehe Dateiname.
+        $serie = Dateiname::sicher((string) ($s['serie'] ?? ''));
         if ($serie === '') {
             return $basis . '/';
         }
@@ -1596,7 +1759,7 @@ class SeriesRecorder extends IPSModule
     private function legeOrdnerAn(array $s): void
     {
         $lokal = rtrim(trim($this->ReadPropertyString('AufnahmepfadLokal')), '/');
-        $serie = trim((string) ($s['serie'] ?? ''));
+        $serie = Dateiname::sicher((string) ($s['serie'] ?? ''));   // derselbe Name wie am Receiver
         if ($lokal === '' || $serie === '' || !is_dir($lokal)) {
             return;
         }
@@ -2234,8 +2397,14 @@ class SeriesRecorder extends IPSModule
         if ($nummer === '') {
             $nummer = 'S00E00';
         }
-        $name = (string) $s['serie'] . ' - ' . $nummer;
-        $ep = trim((string) ($s['titel'] ?? ''));
+        // Aus diesem Namen baut der Receiver den DATEINAMEN. Serie und Episode
+        // werden einzeln gesaeubert, damit die Trenner " - " unangetastet bleiben
+        // und der Bestandsscan die Datei spaeter wieder zerlegen kann - er schneidet
+        // genau "<Serie> - " vorne ab, und die Serie steht dort in derselben
+        // gesaeuberten Form wie im Ordnernamen. Siehe Dateiname.
+        $serie = Dateiname::sicher((string) ($s['serie'] ?? ''));
+        $name  = ($serie !== '' ? $serie . ' - ' : '') . $nummer;
+        $ep    = Dateiname::sicher((string) ($s['titel'] ?? ''));
         if ($ep !== '' && $ep !== $name) {
             $name .= ' - ' . $ep;
         }

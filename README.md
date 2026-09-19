@@ -123,6 +123,35 @@ Leerzeichen im Pfad sind unkritisch: `http_build_query` kodiert sie, und die Box
 liest sie unveraendert zurueck (gemessen am 22.08.2026 mit
 `/mnt/net/VUAufnahmen/02 - Filme Sabina`).
 
+### Titel sind keine Dateinamen
+
+Serien- und Episodentitel kommen aus dem EPG, aus der Wunschliste und aus
+TheTVDB. Keine dieser Quellen kuemmert sich um Dateisysteme, und die
+Aufnahmefreigabe liegt auf SMB: dort sind `\ / : * ? " < > |` verboten. Der
+Linux-Client bildet sie per `mapposix` auf den Bereich U+F020 ab - lokal sieht
+der Name richtig aus, auf der NAS-Oberflaeche und in Plex steht ein Kaestchen. So
+entstand aus "Navy CIS: Sydney" ein Ordner mit einem unsichtbaren Sonderzeichen.
+
+`Dateiname::sicher()` raeumt das an den drei Stellen auf, an denen ein Titel zu
+einem Namen wird: `aufnahmeverzeichnis()`, `legeOrdnerAn()` und `timername()`
+(aus dem der Receiver den Dateinamen baut). Ersetzt wird durch ein LEERZEICHEN -
+aus "Tod/Leben" soll nicht "TodLeben" werden -, mehrfache Leerzeichen fallen
+danach zusammen, und damit ergibt "CSI: Miami" das gewohnte "CSI Miami".
+
+Zwei stille Fallen sind mitbehandelt:
+
+* **Punkt oder Leerzeichen am Ende** schneidet Windows wortlos ab. "Magnum P.I."
+  wurde so zu "Magnum P.I", waehrend derselbe Titel anderswo "Magnum PI" ergab -
+  beide Ordner liegen heute nebeneinander auf der Platte.
+* **CON, PRN, AUX, NUL, COM1..9, LPT1..9** sind reservierte Geraetenamen und
+  bekommen einen Unterstrich angehaengt.
+
+Der Bestand verliert dadurch nichts: `Bestand::form()` wirft Satzzeichen ohnehin
+weg, alter Ordnername und gesaeuberter Ablagename vergleichen sich also gleich.
+Der ORDNER heisst aber kuenftig anders - ein bereits bestehender mit verbotenem
+Zeichen muss einmal von Hand umbenannt werden, sonst stehen zwei nebeneinander.
+Auf der Freigabe traf das (Stand 19.09.2026) genau einen von 257 Ordnern.
+
 ## Welche Serien aufgenommen werden
 
 Die Eigenschaft **Serienliste** ist der Master. Jede Zeile hat drei Angaben:
